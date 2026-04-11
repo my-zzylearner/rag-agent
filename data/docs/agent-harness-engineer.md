@@ -964,3 +964,31 @@ throw new Error("所有 Provider 均不可用");
 - https://milvus.io (What Is Harness Engineering for AI Agents?)
 - https://stripe.com (AI Coding Agent Harness Case Study)
 - 多智能体 LLM 复杂问题解决指南
+
+
+---
+## 补充知识（来自网络搜索）
+> query: AI Agent Harness architecture problems challenges solutions framework engineering | 更新时间: 2026-04-12 | hash: 564451515255c59007fd576411512457
+
+# AI Agent Harness Engineering 技术综述
+
+## 核心定义
+Harness Engineering 指为 AI Agent 构建的测试、评估与部署框架体系。旨在通过标准化基础设施，解决 Agent 在复杂动态环境下的可靠性、可观测性及迭代效率问题。
+
+## 关键挑战
+- **上下文管理**：长程记忆保持与状态一致性难以维护。
+- **评估复杂性**：传统指标无法准确衡量 Agent 的决策质量与泛化能力。
+- **架构稳定性**：多模型或工具协作时，错误累积与传播风险高。
+
+## 解决方案与框架
+1. **上下文工程原则**：遵循三大核心原则优化信息输入、检索与状态更新。
+2. **标准化流程**：参考 Anthropic Playbook 等指南，规范开发路径与最佳实践。
+3. **基础设施集成**：利用 Milvus 等向量数据库增强检索增强生成（RAG）能力。
+4. **场景化适配**：针对 Coding Agent 等垂直领域定制专用工程实践。
+
+## 来源
+基于搜索结果标题整理（原始 URL 未在摘要中提供）：
+1. AI Agent Harness, 3 Principles for Context Engineering...
+2. What Is Harness Engineering for AI Agents? - Milvus
+3. Anthropic's New Harness Engineering Playbook...
+4. Harness engineering for coding agent users

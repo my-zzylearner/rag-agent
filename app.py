@@ -21,7 +21,7 @@ from agent.agent import run_agent  # noqa: E402
 st.set_page_config(
     page_title="AI Search Agent",
     page_icon="🔍",
-    layout="wide",
+    layout="centered",
 )
 
 # ── 访问密码校验 ──────────────────────────────────────────
@@ -95,17 +95,42 @@ try:
 except Exception:
     st.sidebar.caption("知识库：统计加载中...")
 
+# 知识内化状态反馈
+import json as _json  # noqa: E402
+_status_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".internalize_status.json")
+if os.path.exists(_status_file):
+    try:
+        with open(_status_file, "r", encoding="utf-8") as _f:
+            _entries = _json.load(_f)
+        if _entries:
+            st.sidebar.caption("最近内化：")
+            for _e in _entries:
+                st.sidebar.caption(f"  {_e['time']} · {_e['query'][:30]} → {_e['file']}")
+    except Exception:
+        pass
+
+RELEVANCE_THRESHOLD = 0.3  # 低于此相关度的检索结果不展示
+
+
+def _render_sources(sources: list) -> None:
+    """统一渲染参考来源，过滤低相关度结果。"""
+    filtered = [s for s in sources if s.get("relevance_score", 0) >= RELEVANCE_THRESHOLD]
+    if not filtered:
+        return
+    with st.expander("📎 参考来源", expanded=False):
+        for src in filtered:
+            score = src.get("relevance_score", "")
+            snippet = src["content"].replace("\n", " ").strip()[:120]
+            st.caption(f"📄 {src['source']}　相关度 {score}")
+            st.text(snippet + "…")
+
+
 # 展示历史消息
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("sources"):
-            with st.expander("📎 参考来源", expanded=False):
-                for src in msg["sources"]:
-                    score = src.get('relevance_score', '')
-                    snippet = src['content'].replace('\n', ' ').strip()[:120]
-                    st.caption(f"📄 {src['source']}　相关度 {score}")
-                    st.text(snippet + "…")
+            _render_sources(msg["sources"])
 
 # ── 用户输入 ──────────────────────────────────────────────
 # chat_input 必须每次都渲染，不能被短路
@@ -164,11 +189,7 @@ if prompt:
 
         if final_answer:
             st.markdown(final_answer)
-            if all_sources:
-                with st.expander("📎 参考来源", expanded=False):
-                    for src in all_sources:
-                        st.markdown(f"**{src['source']}** (相关度: {src.get('relevance_score', 'N/A')})")
-                        st.markdown(f"> {src['content'][:200]}...")
+            _render_sources(all_sources)
         elif was_stopped:
             st.markdown("_已停止_")
 
@@ -179,7 +200,6 @@ if prompt:
         })
 
     st.session_state.agent_running = False
-
     st.session_state.stop_event.clear()
 
 # ── 侧边栏 ────────────────────────────────────────────────
@@ -187,25 +207,14 @@ with st.sidebar:
     st.divider()
     st.header("关于本项目")
     st.markdown("""
-**AI Search Agent** 是一个结合 RAG 和 Web Search 的智能问答系统。
+**AI Search Agent** 是一个基于 RAG + Web Search 的智能问答系统，融合本地向量检索与实时网络搜索，自动路由到最合适的信息源。
 
-**技术架构：**
-- 🧠 LLM: Qwen (阿里百炼)
-- 📦 向量库: ChromaDB
-- 🔗 Embedding: all-MiniLM-L6-v2
-- 🌐 网络搜索: Tavily
-- 🖥️ 前端: Streamlit
-
-**Agent 工作流：**
-1. 分析用户问题
-2. 选择工具（知识库 or 网络）
-3. 执行检索
-4. 融合结果生成回答
-
-**知识库内容：**
-- RAG 技术原理
-- 向量数据库对比
-- 搜索排序算法
+**核心能力：**
+- 🔀 智能路由：由阿里百炼 Qwen 驱动决策，实时信息走 Web Search，专业知识走 RAG，自动判断无需手动切换
+- 🧠 知识自动内化：Web Search 结果经 LLM 提炼后增量写入知识库，越用越聪明
+- 📎 来源可溯：每条回答附带参考来源和相关度评分
+- ⏹ 随时可停：回答过程中可中断，已获取的结果不丢失
+- 🔧 运行时调参：无需重启即可调整检索条数和工具调用轮次
     """)
 
     # 历史输入记录（点击直接重发，最多显示最近 10 条）
@@ -229,5 +238,11 @@ with st.sidebar:
         st.rerun()
 
     if st.button("🔄 重建知识库", use_container_width=True):
+        try:
+            col = get_collection()
+            if col.count() > 0:
+                col.delete(where={"source": {"$ne": ""}})
+        except Exception:
+            pass
         st.cache_resource.clear()
         st.rerun()

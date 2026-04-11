@@ -92,14 +92,14 @@ metadata: {"source": url, "type": "web_cache"}
 
 ## TODO（待实现）
 
-| # | 功能 | 文件 | 说明 |
+| # | 功能 | 状态 | 说明 |
 |---|------|------|------|
-| 1 | 来源展示统一 | `app.py` | 历史消息用 `st.markdown` 渲染来源，当前消息用 `st.text`，两处不一致，统一成一套 |
-| 2 | 移动端适配 | `app.py` | `layout="wide"` 改为 `layout="centered"`，手机端可正常使用 |
-| 3 | 知识内化状态反馈 | `app.py`、`rag/knowledge_internalizer.py` | 异步内化完成后写状态文件，侧边栏展示"最近内化：XXX"，需文件中转（异步线程不能直接写 session_state） |
-| 4 | `.env` 注释格式修复 | `.env` | `python-dotenv` 不支持行内注释（`key=value ; 注释`），改成独立行 `# 注释`，消除启动时的解析警告 |
-| 5 | 相关度阈值过滤 | `rag/retriever.py` | 低于阈值（如 0.3）的检索结果不传给 LLM，减少噪音干扰回答质量 |
-| 6 | ChromaDB 持久化 | 部署配置 | Streamlit Cloud 每次冷启动需重建知识库，可考虑挂载外部存储或用云端向量库 |
+| 1 | 来源展示统一 | ✅ 已完成 | 提取 `_render_sources()` 统一渲染，历史消息和当前回答共用 |
+| 2 | 移动端适配 | ✅ 已完成 | `layout="wide"` → `layout="centered"` |
+| 3 | 知识内化状态反馈 | ✅ 已完成 | 内化完成写 `.internalize_status.json`，侧边栏展示最近 5 条 |
+| 4 | `.env` 注释格式修复 | ✅ 已完成 | `;` 改为 `#`，消除 python-dotenv 解析警告 |
+| 5 | 相关度阈值过滤 | ✅ 已完成 | `_render_sources()` 内过滤 < 0.3 的结果，不展示低相关度来源 |
+| 6 | ChromaDB 持久化 | ⏳ 待实现 | Streamlit Cloud 每次冷启动需重建知识库，可考虑挂载外部存储或用云端向量库 |
 
 ### 6. 知识内化升级（LLM 提炼 + 文档增量写入）
 
@@ -185,3 +185,4 @@ yield {"type": "answer", "content": final_resp.choices[0].message.content}
 - 2026-04-11: 知识内化升级为 LLM 提炼 + 文档增量写入（异步）；新增运行时参数配置滑块
 - 2026-04-11: 知识内化路由升级为 frontmatter 动态路由；indexer 支持递归扫描和 frontmatter 解析
 - 2026-04-11: 工具调用轮次上限由报错改为强制生成最终回答；修复 ChromaDB 相对路径冲突
+- 2026-04-12: 完成 TODO 1-5：来源展示统一、移动端适配、知识内化状态反馈、.env 注释格式、相关度阈值过滤

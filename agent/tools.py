@@ -92,15 +92,18 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
             for r in response.get("results", [])
         ]
 
-        # 自动内化：将搜索结果写入知识库，下次同类问题直接本地检索
-        try:
-            chunks = [
-                {"text": r["content"], "source": r["source"]}
-                for r in results if r["content"]
-            ]
-            add_chunks(chunks)
-        except Exception:
-            pass  # 内化失败不影响主流程
+        # 自动内化：将搜索结果写入知识库，实时性强的内容不内化
+        _REALTIME_KEYWORDS = ("天气", "weather", "气温", "新闻", "stock", "股价", "今日", "今天", "明天", "实时")
+        is_realtime = any(kw in query.lower() for kw in _REALTIME_KEYWORDS)
+        if not is_realtime:
+            try:
+                chunks = [
+                    {"text": r["content"], "source": r["source"]}
+                    for r in results if r["content"]
+                ]
+                add_chunks(chunks)
+            except Exception:
+                pass  # 内化失败不影响主流程
 
         # 异步知识内化（提炼后写入 data/docs/）
         if llm_client and results:

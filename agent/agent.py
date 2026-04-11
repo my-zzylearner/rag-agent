@@ -90,8 +90,10 @@ def run_agent(
         yield {"type": "error", "content": str(e)}
         return
 
+    from datetime import datetime
+    today = datetime.now().strftime("%Y年%m月%d日")
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + f"\n\n当前日期：{today}"},
         {"role": "user", "content": user_query},
     ]
 
