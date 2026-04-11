@@ -49,7 +49,11 @@ def test_chunk_short_text():
     assert chunks[0]["text"] == "short text"
 
 
-# ── 索引与检索测试（使用临时 ChromaDB）──────────────────────
+# ── 索引与检索测试（需要 embedding 模型，标记为 slow）────────
+# 运行：pytest tests/ -m slow
+# 快速测试（跳过 slow）：pytest tests/ -m "not slow"
+
+pytestmark_slow = pytest.mark.slow
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +67,7 @@ def clean_collection():
         col.delete(where={"source": {"$ne": ""}})
 
 
+@pytest.mark.slow
 def test_add_chunks_basic():
     """add_chunks 能正常写入并返回数量"""
     chunks = [
@@ -74,6 +79,7 @@ def test_add_chunks_basic():
     assert get_collection().count() == 2
 
 
+@pytest.mark.slow
 def test_add_chunks_dedup():
     """相同内容重复写入不会产生重复记录"""
     chunks = [{"text": "duplicate content for dedup test", "source": "test.md"}]
@@ -82,11 +88,13 @@ def test_add_chunks_dedup():
     assert get_collection().count() == 1
 
 
+@pytest.mark.slow
 def test_add_chunks_empty():
     """空列表写入返回 0"""
     assert add_chunks([]) == 0
 
 
+@pytest.mark.slow
 def test_retrieve_returns_results():
     """写入内容后能检索到相关结果"""
     add_chunks([
@@ -98,6 +106,7 @@ def test_retrieve_returns_results():
     assert all("text" in r and "source" in r and "score" in r for r in results)
 
 
+@pytest.mark.slow
 def test_retrieve_score_range():
     """检索结果的相关度分数在 0~1 之间"""
     add_chunks([{"text": "vector similarity search with cosine distance", "source": "vec.md"}])
@@ -106,12 +115,14 @@ def test_retrieve_score_range():
         assert 0.0 <= r["score"] <= 1.0
 
 
+@pytest.mark.slow
 def test_retrieve_empty_collection():
     """空知识库检索返回空列表"""
     results = retrieve("anything")
     assert results == []
 
 
+@pytest.mark.slow
 def test_retrieve_top_k():
     """top_k 参数限制返回数量"""
     chunks = [{"text": f"document number {i} about AI search", "source": f"doc{i}.md"} for i in range(10)]

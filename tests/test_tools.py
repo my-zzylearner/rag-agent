@@ -54,6 +54,7 @@ def test_search_kb_empty():
     assert "message" in result
 
 
+@pytest.mark.slow
 def test_search_kb_with_data():
     """知识库有数据时能返回结果"""
     add_chunks([{"text": "RAG is retrieval augmented generation technology", "source": "rag.md"}])
@@ -65,6 +66,7 @@ def test_search_kb_with_data():
     assert "relevance_score" in first
 
 
+@pytest.mark.slow
 def test_search_kb_relevance_score():
     """相关度分数在合理范围内"""
     add_chunks([{"text": "vector database stores high dimensional embeddings", "source": "vec.md"}])
@@ -73,6 +75,7 @@ def test_search_kb_relevance_score():
         assert 0.0 <= r["relevance_score"] <= 1.0
 
 
+@pytest.mark.slow
 def test_search_kb_top_k():
     """top_k 参数限制返回数量"""
     chunks = [{"text": f"AI search technology document {i}", "source": f"doc{i}.md"} for i in range(10)]
@@ -83,6 +86,7 @@ def test_search_kb_top_k():
 
 # ── execute_tool 测试 ─────────────────────────────────────
 
+@pytest.mark.slow
 def test_execute_tool_kb():
     """execute_tool 调用 search_knowledge_base 返回合法 JSON"""
     add_chunks([{"text": "BM25 is a keyword ranking algorithm", "source": "bm25.md"}])

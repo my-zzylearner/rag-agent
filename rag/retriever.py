@@ -34,7 +34,7 @@ def retrieve(query: str, top_k: int = TOP_K) -> List[Dict]:
     ):
         chunks.append({
             "text": text,
-            "source": meta["source"],
+            "source": (meta or {}).get("source", "unknown"),
             "score": round(1 - dist, 4),  # cosine distance → similarity
         })
 

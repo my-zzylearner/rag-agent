@@ -88,6 +88,23 @@ rag-agent/
 - 搜索排序算法（BM25、向量检索、混合检索、Reranking）
 - LLM Agent 架构与 Function Calling 机制
 
+## 测试
+
+```bash
+# 快速测试（默认，跳过需要模型加载的用例，秒级完成）
+venv/bin/pytest tests/ -m "not slow"
+
+# 完整测试（包含 embedding 检索链路，首次运行需下载模型）
+venv/bin/pytest tests/ -m slow
+```
+
+测试覆盖：
+- Chunking 逻辑（overlap、边界情况）
+- 知识库写入与去重
+- 向量检索结果格式与分数范围
+- Agent 工具描述格式（Function Calling 规范）
+- 工具异常入参处理
+
 ## 面试延伸
 
 > 如果这个项目要上生产，你会怎么改？
