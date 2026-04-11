@@ -3,6 +3,10 @@
 """
 import os
 import glob
+
+# 禁用 chromadb 遥测，必须在 import chromadb 之前设置
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False"
 import hashlib
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
