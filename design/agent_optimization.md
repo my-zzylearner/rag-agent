@@ -90,6 +90,17 @@ metadata: {"source": url, "type": "web_cache"}
 - web_cache 条目积累后的清理机制 — 目前无过期策略，长期使用后知识库会持续增长
 - 内化内容质量控制 — Tavily 返回的网页摘要质量参差不齐，暂未过滤
 
+## TODO（待实现）
+
+| # | 功能 | 文件 | 说明 |
+|---|------|------|------|
+| 1 | 来源展示统一 | `app.py` | 历史消息用 `st.markdown` 渲染来源，当前消息用 `st.text`，两处不一致，统一成一套 |
+| 2 | 移动端适配 | `app.py` | `layout="wide"` 改为 `layout="centered"`，手机端可正常使用 |
+| 3 | 知识内化状态反馈 | `app.py`、`rag/knowledge_internalizer.py` | 异步内化完成后写状态文件，侧边栏展示"最近内化：XXX"，需文件中转（异步线程不能直接写 session_state） |
+| 4 | `.env` 注释格式修复 | `.env` | `python-dotenv` 不支持行内注释（`key=value ; 注释`），改成独立行 `# 注释`，消除启动时的解析警告 |
+| 5 | 相关度阈值过滤 | `rag/retriever.py` | 低于阈值（如 0.3）的检索结果不传给 LLM，减少噪音干扰回答质量 |
+| 6 | ChromaDB 持久化 | 部署配置 | Streamlit Cloud 每次冷启动需重建知识库，可考虑挂载外部存储或用云端向量库 |
+
 ### 6. 知识内化升级（LLM 提炼 + 文档增量写入）
 
 **实现文件**：`rag/knowledge_internalizer.py`（新建）、`rag/indexer.py`（新增 `index_single_document`）、`agent/tools.py`（触发异步线程）
@@ -128,8 +139,49 @@ Step 5: index_single_document(filepath) 重索引该文件
 
 侧边栏顶部两个滑块：`max_tool_rounds`（1-6，默认3）和 `top_k`（1-10，默认4），每次对话读取当前值传给 `run_agent`，无需重启生效。
 
+### 8. 知识内化路由升级（frontmatter 动态路由）
+
+**实现文件**：`data/docs/*.md`（加 frontmatter）、`rag/knowledge_internalizer.py`（路由改造）、`rag/indexer.py`（递归扫描 + frontmatter 解析）
+
+**核心设计**：
+- 每个文档头部加 YAML frontmatter，包含 `topic`/`keywords`/`description`/`type` 字段
+- `_route()` 动态扫描 `data/docs/**/*.md`，读取各文件 `description`，构造候选列表交给 LLM 判断
+- LLM 返回文件名 → 追加到该文件；返回 "new" → 调用 `_new_file()` 新建带 frontmatter 的文件
+- `load_documents` 改为递归扫描（支持子目录），解析 frontmatter 后只索引正文，metadata 带 `topic`/`type`
+
+**优势**：
+- 新增文档自动纳入路由，无需修改代码
+- 原始文档和补充内容在同一文件，主题知识完整
+- frontmatter 作为文档的"技能描述"，路由判断更准确
+
+### 9. 工具调用轮次上限行为优化
+
+**实现文件**：`agent/agent.py`
+
+**改动前**：达到 `max_tool_rounds` 时 yield `type: error`，直接报错，已收集的工具结果被丢弃。
+
+**改动后**：达到上限时，去掉 `tools` 参数再调用一次 LLM，强制基于已有工具结果生成最终回答，不再报错。
+
+```python
+# 达到最大轮次，禁用工具强制 LLM 基于已有结果生成最终回答
+final_resp = client.chat.completions.create(model=model, messages=messages)
+yield {"type": "answer", "content": final_resp.choices[0].message.content}
+```
+
+**Why**：之前的报错会让用户看到"请重新提问"，但实际上 LLM 已经拿到了足够的检索结果，强制生成一次回答比报错更有价值。
+
+### 10. ChromaDB 路径绝对化
+
+**实现文件**：`rag/indexer.py`
+
+**问题**：`CHROMA_PATH = "./chroma_db"` 相对路径在不同调用方（app.py、retriever.py）工作目录不同时，ChromaDB 认为是两个不同实例，报 `ValueError: An instance of Chroma already exists with different settings`。
+
+**修复**：改为基于 `__file__` 的绝对路径，同时用 `@functools.lru_cache(maxsize=1)` 保证 `get_collection()` 进程级单例。
+
 ## 变更记录
 
 - 2026-04-11: 完成三项优化实现（停止控制、联网路由、知识内化 web_cache）
 - 2026-04-11: 新增历史输入重发（侧边栏点击）、访问密码校验
 - 2026-04-11: 知识内化升级为 LLM 提炼 + 文档增量写入（异步）；新增运行时参数配置滑块
+- 2026-04-11: 知识内化路由升级为 frontmatter 动态路由；indexer 支持递归扫描和 frontmatter 解析
+- 2026-04-11: 工具调用轮次上限由报错改为强制生成最终回答；修复 ChromaDB 相对路径冲突

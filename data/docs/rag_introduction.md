@@ -1,3 +1,10 @@
+---
+topic: RAG技术原理
+keywords: rag, retrieval-augmented generation, chunking, embedding, vector search, hyde, reranking, rag optimization
+description: 介绍RAG（检索增强生成）的完整技术原理，包括离线索引与在线检索流程、Chunking分块策略、Embedding模型选型、查询优化（HyDE/多查询/改写）及检索优化（混合检索/Reranking）方向，适用于判断与RAG系统构建、优化相关的知识路由。
+type: knowledge_base
+---
+
 # RAG（检索增强生成）技术详解
 
 ## 什么是 RAG

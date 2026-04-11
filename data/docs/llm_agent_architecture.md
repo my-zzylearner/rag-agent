@@ -1,3 +1,10 @@
+---
+topic: LLM Agent架构
+keywords: llm agent, function calling, react, multi-agent, planning, tool use, autogen, crewai, langgraph, orchestration
+description: 介绍LLM Agent的核心架构（规划/工具/记忆/执行循环）、Function Calling机制、ReAct推理框架及Multi-Agent协作模式，适用于判断与智能体设计、工具调用、Agent框架选型相关的知识路由。
+type: knowledge_base
+---
+
 # LLM Agent 架构与工具调用详解
 
 ## 什么是 LLM Agent

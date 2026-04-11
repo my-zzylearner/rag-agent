@@ -150,10 +150,14 @@ def run_agent(
                 "content": tool_result_str,
             })
 
-        # 超出最大轮次，强制结束
+        # 达到最大轮次，禁用工具强制 LLM 基于已有结果生成最终回答
         if round_num >= max_tool_rounds:
-            yield {
-                "type": "error",
-                "content": "已达到最大工具调用轮次，请重新提问。",
-            }
+            try:
+                final_resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                )
+                yield {"type": "answer", "content": final_resp.choices[0].message.content or ""}
+            except Exception as e:
+                yield {"type": "error", "content": f"调用 LLM API 失败: {str(e)}"}
             return

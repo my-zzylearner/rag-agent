@@ -8,11 +8,13 @@ from dotenv import load_dotenv
 # 禁用 chromadb 遥测，避免 opentelemetry 依赖问题（强制覆盖，确保生效）
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
+# chromadb 依赖的 opentelemetry 用了旧版 protobuf 生成代码，需强制用纯 Python 实现
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import streamlit as st
 
 load_dotenv()
 
-from rag.indexer import index_documents, is_indexed  # noqa: E402
+from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
 
 # ── 页面配置 ──────────────────────────────────────────────
@@ -83,16 +85,15 @@ _slider_disabled = st.session_state.agent_running
 cfg_max_rounds = st.sidebar.slider("最大工具调用轮次", min_value=1, max_value=6, value=3, step=1, disabled=_slider_disabled)
 cfg_top_k = st.sidebar.slider("知识库检索条数", min_value=1, max_value=10, value=4, step=1, disabled=_slider_disabled)
 
-# 知识库统计（每次 rerun 刷新）
-from rag.indexer import get_collection as _get_col  # noqa: E402
-_col = _get_col()
-_total = _col.count()
+# 知识库统计（get_collection 内部用 lru_cache 保证进程级单例）
 try:
+    _col = get_collection()
+    _total = _col.count()
     _web = len(_col.get(where={"type": {"$eq": "web_cache"}}, include=[])["ids"])
+    _local = _total - _web
+    st.sidebar.caption(f"知识库：{_local} 本地 + {_web} 网络缓存 = {_total} 条")
 except Exception:
-    _web = 0
-_local = _total - _web
-st.sidebar.caption(f"知识库：{_local} 本地 + {_web} 网络缓存 = {_total} 条")
+    st.sidebar.caption("知识库：统计加载中...")
 
 # 展示历史消息
 for msg in st.session_state.messages:
@@ -189,7 +190,7 @@ with st.sidebar:
 **AI Search Agent** 是一个结合 RAG 和 Web Search 的智能问答系统。
 
 **技术架构：**
-- 🧠 LLM: ERNIE-Speed (文心一言)
+- 🧠 LLM: Qwen (阿里百炼)
 - 📦 向量库: ChromaDB
 - 🔗 Embedding: all-MiniLM-L6-v2
 - 🌐 网络搜索: Tavily

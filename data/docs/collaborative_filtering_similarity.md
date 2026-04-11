@@ -1,5 +1,9 @@
-
-
+---
+topic: 协同过滤相似度计算
+keywords: collaborative filtering, cosine similarity, pearson correlation, jaccard, similarity metrics, recommender system
+description: 介绍协同过滤算法中的相似度计算方法，包括余弦相似度、皮尔逊相关系数、Jaccard 系数的原理和适用场景
+type: knowledge_base
+---
 ---
 ## 补充知识（来自网络搜索）
 > query: 协同过滤算法 余弦相似度 皮尔逊相关系数 Jaccard 计算方式 | 更新时间: 2026-04-11 | hash: 0c4e3bd3d890da8b048d46ba485e32a1

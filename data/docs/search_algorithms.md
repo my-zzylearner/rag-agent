@@ -1,3 +1,10 @@
+---
+topic: 搜索与排序算法
+keywords: bm25, vector search, hybrid search, reranking, rrf, cross-encoder, learning to rank, ndcg, recall, ranking
+description: 覆盖信息检索全链路算法，包括BM25关键词检索、向量语义检索、RRF混合检索融合策略、Cross-Encoder重排序（Reranking）及Learning to Rank三种范式，适用于判断与搜索算法原理、检索策略设计和排序模型相关的知识路由。
+type: knowledge_base
+---
+
 # 搜索排序算法详解
 
 ## 信息检索基础

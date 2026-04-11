@@ -3,10 +3,13 @@
 """
 import os
 import glob
+import functools
 
 # 禁用 chromadb 遥测，必须在 import chromadb 之前设置
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
+# chromadb 依赖的 opentelemetry 用了旧版 protobuf 生成代码，需强制用纯 Python 实现
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import hashlib
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
@@ -15,11 +18,10 @@ import chromadb
 CHUNK_SIZE = 512      # 每个 chunk 的字符数
 CHUNK_OVERLAP = 64    # 相邻 chunk 的重叠字符数，保留上下文连贯性
 COLLECTION_NAME = "rag_docs"
-CHROMA_PATH = "./chroma_db"
+# 用绝对路径，避免不同调用方工作目录不同导致 ChromaDB "different settings" 冲突
+CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chroma_db")
 
 _embedder = None
-_chroma_client = None
-_collection = None
 
 
 def get_embedder() -> SentenceTransformer:
@@ -35,34 +37,51 @@ def get_embedder() -> SentenceTransformer:
     return _embedder
 
 
+@functools.lru_cache(maxsize=1)
 def get_collection():
-    global _chroma_client, _collection
-    if _collection is None:
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-        _collection = _chroma_client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
-    return _collection
+    """进程级单例，lru_cache 保证 PersistentClient 只初始化一次。"""
+    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
+def _parse_frontmatter(content: str):
+    """返回 (meta_dict, body_text)"""
+    if not content.startswith("---"):
+        return {}, content
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}, content
+    fm_text = content[3:end].strip()
+    body = content[end + 4:].lstrip("\n")
+    meta = {}
+    for line in fm_text.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    return meta, body
 
 
 def load_documents(docs_dir: str) -> List[Dict]:
-    """加载 docs_dir 下所有 .txt / .md / .pdf 文件，返回 [{text, source}]"""
+    """加载 docs_dir 下所有 .txt / .md / .pdf 文件（递归子目录），返回 [{text, source, meta}]"""
     docs = []
     patterns = ["*.txt", "*.md"]
     for pattern in patterns:
-        for path in glob.glob(os.path.join(docs_dir, pattern)):
+        for path in glob.glob(os.path.join(docs_dir, "**", pattern), recursive=True):
             with open(path, "r", encoding="utf-8") as f:
-                text = f.read()
-            docs.append({"text": text, "source": os.path.basename(path)})
+                content = f.read()
+            meta, text = _parse_frontmatter(content)
+            docs.append({"text": text, "source": os.path.basename(path), "meta": meta})
 
     # PDF 支持（可选，需要 pypdf）
     try:
         from pypdf import PdfReader
-        for path in glob.glob(os.path.join(docs_dir, "*.pdf")):
+        for path in glob.glob(os.path.join(docs_dir, "**", "*.pdf"), recursive=True):
             reader = PdfReader(path)
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            docs.append({"text": text, "source": os.path.basename(path)})
+            docs.append({"text": text, "source": os.path.basename(path), "meta": {}})
     except ImportError:
         pass
 
@@ -98,10 +117,13 @@ def index_documents(docs_dir: str = "./data/docs") -> int:
 
     all_chunks = []
     for doc in docs:
-        all_chunks.extend(chunk_text(doc["text"], doc["source"]))
+        for chunk in chunk_text(doc["text"], doc["source"]):
+            chunk["meta"] = doc.get("meta", {})
+            all_chunks.append(chunk)
 
     texts = [c["text"] for c in all_chunks]
     sources = [c["source"] for c in all_chunks]
+    metas = [c["meta"] for c in all_chunks]
     ids = [f"chunk_{i}" for i in range(len(all_chunks))]
 
     embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
@@ -110,7 +132,7 @@ def index_documents(docs_dir: str = "./data/docs") -> int:
         ids=ids,
         embeddings=embeddings,
         documents=texts,
-        metadatas=[{"source": s} for s in sources],
+        metadatas=[{"source": s, "topic": m.get("topic", ""), "type": m.get("type", "knowledge_base")} for s, m in zip(sources, metas)],
     )
 
     return len(all_chunks)
@@ -138,10 +160,11 @@ def index_single_document(filepath: str) -> int:
     # 读取文件内容
     try:
         with open(filepath, "r", encoding="utf-8") as f:
-            text = f.read()
+            content = f.read()
     except OSError:
         return 0
 
+    meta, text = _parse_frontmatter(content)
     chunks = chunk_text(text, filename)
     if not chunks:
         return 0
@@ -154,7 +177,7 @@ def index_single_document(filepath: str) -> int:
         ids=ids,
         embeddings=embeddings,
         documents=texts,
-        metadatas=[{"source": filename} for _ in chunks],
+        metadatas=[{"source": filename, "topic": meta.get("topic", ""), "type": meta.get("type", "knowledge_base")} for _ in chunks],
     )
     return len(chunks)
 

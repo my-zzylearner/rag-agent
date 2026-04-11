@@ -1,5 +1,9 @@
-
-
+---
+topic: 协同过滤算法（UserCF vs ItemCF）
+keywords: user-based collaborative filtering, item-based collaborative filtering, usercf, itemcf, recommender system, similarity
+description: 介绍基于用户和基于物品的协同过滤算法原理、相似度计算方式及优缺点对比，适合存放推荐系统协同过滤相关知识
+type: knowledge_base
+---
 ---
 ## 补充知识（来自网络搜索）
 > query: 基于用户 基于物品 协同过滤算法原理区别 相似度计算 | 更新时间: 2026-04-11 | hash: 58164e70d81a11f71afe872a597ef66f

@@ -1,3 +1,10 @@
+---
+topic: 向量数据库选型
+keywords: vector database, chroma, pinecone, milvus, qdrant, weaviate, faiss, hnsw, ivf, ann, embedding storage
+description: 对比主流向量数据库（Chroma/Pinecone/Milvus/Qdrant/Weaviate/FAISS）的特性与适用场景，包含选型决策建议、HNSW/IVF等核心索引算法原理及生产化注意事项，适用于判断与向量数据库选型、部署和索引算法相关的知识路由。
+type: knowledge_base
+---
+
 # 向量数据库对比与选型指南
 
 ## 什么是向量数据库

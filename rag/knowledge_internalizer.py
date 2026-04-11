@@ -4,6 +4,7 @@
 对通用知识类搜索结果，提炼后增量写入 data/docs/ 下的 .md 文件，并重新索引。
 实时类信息（天气/股价/突发新闻等）直接跳过，不做内化。
 """
+import glob
 import os
 import hashlib
 from datetime import datetime
@@ -19,13 +20,6 @@ REALTIME_KEYWORDS = [
     "股价", "股票", "今日", "今天", "实时", "最新行情", "涨跌",
     "breaking news", "weather", "stock price", "today's",
 ]
-
-TOPIC_MAP = {
-    "rag_introduction.md":       ["rag", "检索增强", "embedding", "向量检索", "chunking", "retrieval"],
-    "llm_agent_architecture.md": ["agent", "function calling", "react", "工具调用", "规划", "plan", "tool use"],
-    "vector_databases.md":       ["向量数据库", "chroma", "pinecone", "milvus", "qdrant", "faiss", "vector db"],
-    "search_algorithms.md":      ["bm25", "混合检索", "reranking", "排序", "召回", "hybrid search"],
-}
 
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "docs")
 
@@ -145,40 +139,19 @@ def _refine(query: str, results: list, client, model: str) -> str:
 # Step 3 — 路由到目标文档
 # ──────────────────────────────────────────────
 
-def _route(query: str, refined: str, client, model: str) -> str:
-    """返回目标文档的绝对路径。"""
-    combined = (query + " " + refined).lower()
-
-    best_file = None
-    best_score = 0
-    for filename, keywords in TOPIC_MAP.items():
-        score = sum(1 for kw in keywords if kw.lower() in combined)
-        if score > best_score:
-            best_score = score
-            best_file = filename
-
-    if best_file and best_score > 0:
-        return os.path.join(DOCS_DIR, best_file)
-
-    # 无匹配，让 LLM 生成新文件名
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "只返回文件名，如 recommendation_system.md，不要解释。\n"
-                f"主题：{query}"
-            ),
-        },
-    ]
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0,
-    )
-    raw_name = response.choices[0].message.content.strip()
-    # 取最后一个 token，防止 LLM 多余输出
-    filename = _sanitize_filename(raw_name)
-    return os.path.join(DOCS_DIR, filename)
+def _read_frontmatter(content: str) -> dict:
+    """解析 markdown 文件头部的 YAML frontmatter，返回 key-value 字典。"""
+    if not content.startswith("---"):
+        return {}
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}
+    meta = {}
+    for line in content[3:end].strip().splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    return meta
 
 
 def _sanitize_filename(raw: str) -> str:
@@ -195,6 +168,95 @@ def _sanitize_filename(raw: str) -> str:
     if cleaned in (".md",):
         cleaned = "misc_knowledge.md"
     return cleaned
+
+
+def _new_file(query: str, client, model: str) -> str:
+    """让 LLM 生成文件名，新建带 frontmatter 的空文件，返回绝对路径。"""
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "只返回文件名，如 recommendation_system.md，不要解释。\n"
+                f"主题：{query}"
+            ),
+        },
+    ]
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0,
+    )
+    raw_name = response.choices[0].message.content.strip()
+    filename = _sanitize_filename(raw_name)
+    filepath = os.path.join(DOCS_DIR, filename)
+
+    # 推导 topic：去掉 .md 后缀，下划线换空格
+    topic = filename[:-3].replace("_", " ")
+    frontmatter = (
+        f"---\n"
+        f"topic: {topic}\n"
+        f"keywords: \n"
+        f"description: {query} 相关知识\n"
+        f"type: knowledge_base\n"
+        f"---\n\n"
+    )
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(frontmatter)
+    return filepath
+
+
+def _route(query: str, refined: str, client, model: str) -> str:
+    """
+    动态读取 DOCS_DIR 下所有 .md 的 frontmatter description，
+    让 LLM 选择最合适的目标文件。
+    返回目标文件的绝对路径。
+    """
+    # 1. 扫描所有 .md 文件（递归），读取 frontmatter
+    candidates = []  # [{"path": str, "filename": str, "description": str}]
+    for path in glob.glob(os.path.join(DOCS_DIR, "**", "*.md"), recursive=True):
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        meta = _read_frontmatter(content)
+        if meta.get("description"):
+            candidates.append({
+                "path": path,
+                "filename": os.path.basename(path),
+                "description": meta["description"],
+            })
+
+    # 2. 构造候选列表给 LLM
+    if not candidates:
+        return _new_file(query, client, model)
+
+    options = "\n".join(
+        f"{i + 1}. {c['filename']}: {c['description']}"
+        for i, c in enumerate(candidates)
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是知识库管理员。根据搜索内容，从候选文件列表中选择最合适的文件存放该知识。\n"
+                "如果没有合适的文件，回答 'new'。\n"
+                "只回答文件名（如 rag_introduction.md）或 'new'，不要解释。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"搜索词：{query}\n\n候选文件：\n{options}",
+        },
+    ]
+    response = client.chat.completions.create(model=model, messages=messages, temperature=0)
+    answer = response.choices[0].message.content.strip()
+
+    # 3. 匹配回答到候选文件
+    for c in candidates:
+        if c["filename"] in answer:
+            return c["path"]
+
+    # 4. 没有匹配或回答 new，新建文件
+    return _new_file(query, client, model)
 
 
 # ──────────────────────────────────────────────

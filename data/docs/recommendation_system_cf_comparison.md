@@ -1,5 +1,9 @@
-
-
+---
+topic: 推荐系统协同过滤算法对比
+keywords: collaborative filtering, usercf, itemcf, cold start, data sparsity, recommendation system, 推荐算法
+description: 介绍协同过滤推荐算法的分类、优缺点（冷启动、数据稀疏、扩展性）及适用场景，适合存放推荐系统算法对比相关知识
+type: knowledge_base
+---
 ---
 ## 补充知识（来自网络搜索）
 > query: 推荐系统 协同过滤算法分类 优缺点对比 | 更新时间: 2026-04-11 | hash: 9133d9e6fc7590819ba781b40526c04a
