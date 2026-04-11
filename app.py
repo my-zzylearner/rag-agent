@@ -1,8 +1,13 @@
 """
 Streamlit 前端入口
 """
+import os
 import threading
 from dotenv import load_dotenv
+
+# 禁用 chromadb 遥测，避免 opentelemetry 依赖问题
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
 import streamlit as st
 
 load_dotenv()
