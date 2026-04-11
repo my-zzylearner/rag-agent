@@ -1,0 +1,130 @@
+"""
+Agent 可调用的工具定义
+"""
+import os
+import json
+from typing import Dict
+from tavily import TavilyClient
+
+from rag.retriever import retrieve
+from rag.indexer import add_chunks
+
+# 工具描述（OpenAI tool_call 格式）
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": (
+                "从本地知识库中检索与问题相关的内容。"
+                "仅适用于：AI技术、RAG、向量数据库、搜索算法等专业原理性问题。"
+                "不适用于：天气、新闻、股价等实时信息，这类请使用 search_web。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "用于检索的查询语句，尽量简洁精准",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": (
+                "从互联网搜索最新信息。"
+                "适用于：天气、新闻、股价、实时数据、知识库未覆盖的内容。"
+                "当 search_knowledge_base 返回空结果时，必须调用此工具继续搜索。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+def search_knowledge_base(query: str, top_k: int = 4) -> Dict:
+    """调用 RAG 检索，返回结构化结果"""
+    chunks = retrieve(query, top_k=top_k)
+    if not chunks:
+        return {"results": [], "message": "知识库中未找到相关内容"}
+
+    return {
+        "results": [
+            {
+                "content": c["text"],
+                "source": c["source"],
+                "relevance_score": c["score"],
+            }
+            for c in chunks
+        ]
+    }
+
+
+def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
+    """调用 Tavily 网络搜索"""
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return {"results": [], "message": "TAVILY_API_KEY 未配置"}
+
+    try:
+        client = TavilyClient(api_key=api_key)
+        response = client.search(query=query, max_results=4)
+        results = [
+            {
+                "content": r.get("content", ""),
+                "source": r.get("url", ""),
+                "title": r.get("title", ""),
+            }
+            for r in response.get("results", [])
+        ]
+
+        # 自动内化：将搜索结果写入知识库，下次同类问题直接本地检索
+        try:
+            chunks = [
+                {"text": r["content"], "source": r["source"]}
+                for r in results if r["content"]
+            ]
+            add_chunks(chunks)
+        except Exception:
+            pass  # 内化失败不影响主流程
+
+        # 异步知识内化（提炼后写入 data/docs/）
+        if llm_client and results:
+            import threading
+            from rag.knowledge_internalizer import internalize_async
+            t = threading.Thread(
+                target=internalize_async,
+                args=(query, results, llm_client, llm_model),
+                daemon=True,
+            )
+            t.start()
+
+        return {"results": results}
+    except Exception as e:
+        return {"results": [], "message": f"搜索失败: {str(e)}"}
+
+
+def execute_tool(tool_name: str, tool_args: dict, top_k: int = 4, llm_client=None, llm_model: str = "") -> str:
+    """根据工具名执行对应函数，返回 JSON 字符串"""
+    if tool_name == "search_knowledge_base":
+        result = search_knowledge_base(tool_args.get("query", ""), top_k=top_k)
+    elif tool_name == "search_web":
+        result = search_web(tool_args.get("query", ""), llm_client=llm_client, llm_model=llm_model)
+    else:
+        result = {"error": f"未知工具: {tool_name}"}
+
+    return json.dumps(result, ensure_ascii=False)
