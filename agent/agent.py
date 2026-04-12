@@ -74,7 +74,7 @@ def _build_candidates() -> list:
         model = parts[1] if len(parts) == 2 else cfg["model"]
         api_key = os.getenv(cfg["env_var"])
         if not api_key:
-            raise ValueError(f"{cfg['env_var']} 未配置，请检查 .env 文件")
+            raise ValueError(f"{cfg['env_var']} 未配置，请检查 .env 文件或 Streamlit Secrets")
         client = OpenAI(api_key=api_key, base_url=cfg["base_url"])
         candidates.append((client, model, entry))
 

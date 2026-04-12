@@ -10,10 +10,16 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
 import streamlit as st
 
-# 每次 rerun 重新加载 .env，先清除旧值再覆盖，确保注释掉的变量也能失效
-for _k in ("LLM", "LLM_FALLBACK", "TAVILY_API_KEY", "QIANFAN_API_KEY", "DASHSCOPE_API_KEY", "DEBUG"):
-    os.environ.pop(_k, None)
-load_dotenv(override=True)
+# Streamlit Cloud 通过环境变量注入 secrets，不存在 .env 文件
+# 本地开发时重新加载 .env，先清除旧值确保注释掉的变量失效
+_env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip().lstrip("#;").strip()
+            if "=" in _line:
+                os.environ.pop(_line.split("=", 1)[0].strip(), None)
+load_dotenv()
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
