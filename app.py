@@ -23,7 +23,10 @@ load_dotenv(_env_file)
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
-from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
+# from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
+def gist_load(): return None
+def gist_increment(_): pass
+def gist_add_feedback(_): pass
 
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(
@@ -61,6 +64,13 @@ _check_password()
 
 st.title("🔍 AI Search Agent")
 st.caption("RAG + Web Search · Powered by Qwen & Tavily")
+
+@st.cache_resource
+def _load_stats_once():
+    """进程级缓存，只在冷启动时加载一次 Gist 数据。"""
+    return {"data": gist_load()}
+
+_stats_cache = _load_stats_once()
 
 # ── 初始化知识库（只在第一次运行时索引）────────────────────
 @st.cache_resource
@@ -122,7 +132,6 @@ if "cfg_top_k" not in st.session_state:
     st.session_state.cfg_top_k = 4
 
 if st.session_state.agent_running:
-    # agent 运行中：显示静态文本，不渲染 slider（避免交互触发 rerun 中断 agent）
     st.sidebar.caption(f"最大工具调用轮次：{st.session_state.cfg_max_rounds}")
     st.sidebar.caption(f"知识库检索条数：{st.session_state.cfg_top_k}")
     cfg_max_rounds = st.session_state.cfg_max_rounds
@@ -135,11 +144,15 @@ else:
     st.session_state.cfg_max_rounds = cfg_max_rounds
     st.session_state.cfg_top_k = cfg_top_k
 
-# 知识库统计（get_collection 内部用 lru_cache 保证进程级单例）
+@st.cache_data(ttl=60)
+def _get_kb_stats():
+    col = get_collection()
+    total = col.count()
+    web = len(col.get(where={"type": {"$eq": "web_cache"}}, include=[])["ids"])
+    return total, web
+
 try:
-    _col = get_collection()
-    _total = _col.count()
-    _web = len(_col.get(where={"type": {"$eq": "web_cache"}}, include=[])["ids"])
+    _total, _web = _get_kb_stats()
     _local = _total - _web
     st.sidebar.caption(f"知识库：{_local} 本地 + {_web} 网络缓存 = {_total} 条")
 except Exception:
@@ -204,8 +217,8 @@ _typed = st.chat_input("请输入你的问题...")
 prompt = _prefill or _typed
 
 if prompt:
-    st.session_state.stop_event.clear()
     st.session_state.agent_running = True
+    st.session_state.stop_event.clear()
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -221,6 +234,7 @@ if prompt:
             with stop_placeholder:
                 if st.button("⏹ 停止", key="stop_btn"):
                     st.session_state.stop_event.set()
+            stream_ph = [None]  # 用列表包装，避免闭包赋值问题
 
             for event in run_agent(
                 prompt,
@@ -246,22 +260,23 @@ if prompt:
                         all_sources.extend(results)
 
                 elif event["type"] == "answer_chunk":
-                    if not final_answer:
-                        answer_placeholder = st.empty()
+                    if stream_ph[0] is None:
+                        stream_ph[0] = st.empty()
                     final_answer += event["content"]
-                    answer_placeholder.markdown(final_answer + "▌")
+                    stream_ph[0].markdown(final_answer + "▌")
 
                 elif event["type"] == "answer":
                     stop_placeholder.empty()
                     status.update(label="完成", state="complete", expanded=False)
                     gist_increment("queries")
+                    if _stats_cache["data"] is not None:
+                        _stats_cache["data"]["queries"] = _stats_cache["data"].get("queries", 0) + 1
 
                 elif event["type"] == "retry":
                     reason = event.get("reason_label", "调用失败")
                     line = f"⚠️ {event['from']} {reason}，切换到 {event['to']} 重试..."
                     st.warning(line)
                     steps.append({"kind": "retry", "text": line})
-                    status.update(label="Agent 思考中...", expanded=True)
 
                 elif event["type"] == "stopped":
                     was_stopped = True
@@ -294,24 +309,21 @@ if prompt:
     st.session_state.stop_event.clear()
 
 # ── 侧边栏 ────────────────────────────────────────────────
+
 with st.sidebar:
-    # 访问统计 + 留言板（需配置 GITHUB_TOKEN 和 GIST_ID）
-    _stats = gist_load()
-    if _stats is not None:
-        _c1, _c2 = st.columns(2)
-        _c1.metric("👥 访问人数", _stats.get("visits", 0))
-        _c2.metric("🔍 查询次数", _stats.get("queries", 0))
-        with st.expander("💬 留言板", expanded=False):
-            _fb_input = st.text_area("写下你的建议或反馈", key="fb_input", height=80)
-            if st.button("提交留言", use_container_width=True, disabled=not _fb_input):
-                gist_add_feedback(_fb_input.strip())
-                st.toast("感谢你的反馈！")
-                st.rerun()
-            _feedbacks = _stats.get("feedback", [])
-            if _feedbacks:
-                st.caption("最近留言：")
-                for _fb in reversed(_feedbacks[-3:]):
-                    st.caption(f"🗨️ {_fb['time']}　{_fb['content'][:40]}")
+    # 留言板（每次直接从 Gist 拉取，不缓存）
+    with st.expander("💬 留言板", expanded=False):
+        _fb_input = st.text_area("写下你的建议或反馈", key="fb_input", height=80)
+        if st.button("提交留言", use_container_width=True, disabled=not _fb_input):
+            gist_add_feedback(_fb_input.strip())
+            st.toast("感谢你的反馈！")
+            st.rerun()
+        _fb_data = gist_load()
+        _feedbacks = (_fb_data or {}).get("feedback", [])
+        if _feedbacks:
+            st.caption("最近留言：")
+            for _fb in reversed(_feedbacks[-3:]):
+                st.caption(f"🗨️ {_fb['time']}　{_fb['content'][:40]}")
 
     st.divider()
     st.header("关于本项目")
