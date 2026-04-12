@@ -103,7 +103,7 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
             try:
                 chunks = [
                     {"text": r["content"], "source": r["source"]}
-                    for r in results if r["content"]
+                    for r in results if len(r["content"]) >= 50
                 ]
                 add_chunks(chunks)
             except Exception:

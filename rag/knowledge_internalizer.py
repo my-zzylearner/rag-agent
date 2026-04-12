@@ -9,11 +9,44 @@ import os
 import json
 import hashlib
 from datetime import datetime
+from openai import OpenAI
 
 from rag.indexer import index_single_document
 from utils.logger import get_logger
 
 _logger = get_logger(__name__)
+
+# LLM provider 配置（与 agent/agent.py 保持一致，避免循环导入）
+_PROVIDERS = {
+    "qianfan": {
+        "env_var": "QIANFAN_API_KEY",
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "model": "ernie-speed-pro-128k",
+    },
+    "bailian": {
+        "env_var": "DASHSCOPE_API_KEY",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-turbo",
+    },
+}
+
+
+def _build_client(entry: str):
+    """根据 'provider/model' 格式的字符串构建 (client, model) 元组，失败返回 (None, None)。"""
+    parts = entry.strip().split("/", 1)
+    provider = parts[0].lower()
+    if provider not in _PROVIDERS:
+        return None, None
+    cfg = _PROVIDERS[provider]
+    model = parts[1] if len(parts) == 2 else cfg["model"]
+    api_key = os.getenv(cfg["env_var"])
+    if not api_key:
+        return None, None
+    return OpenAI(api_key=api_key, base_url=cfg["base_url"]), model
+
+
+_FALLBACK_ERRORS = ("quota", "allocationquota", "403", "429", "rate limit",
+                    "insufficient", "free tier", "billing", "balance")
 
 # 内化状态文件路径，供 app.py 侧边栏读取
 STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", ".internalize_status.json")
@@ -67,20 +100,86 @@ def internalize_async(query: str, results: list, client, model: str) -> None:
 # 内部实现
 # ──────────────────────────────────────────────
 
+def _build_judge_candidates() -> list:
+    """
+    构建质量判断 LLM 候选列表（LLM_JUDGE + LLM_JUDGE_FALLBACK）。
+    未配置时返回空列表，调用方降级为纯规则判断。
+    """
+    candidates = []
+    primary = os.getenv("LLM_JUDGE", "")
+    if primary:
+        c, m = _build_client(primary)
+        if c:
+            candidates.append((c, m))
+        else:
+            _logger.warning("LLM_JUDGE=%r invalid or api key missing", primary)
+    fallback_str = os.getenv("LLM_JUDGE_FALLBACK", "")
+    for entry in [s.strip() for s in fallback_str.split(",") if s.strip()]:
+        c, m = _build_client(entry)
+        if c:
+            candidates.append((c, m))
+    return candidates
+
+
+def _build_internalize_candidates(client, model: str) -> list:
+    """
+    构建内化 LLM 候选列表：主模型 + LLM_INTERNALIZE_FALLBACK 配置的备用模型。
+    返回 [(client, model), ...] 列表，主模型在首位。
+    """
+    candidates = [(client, model)]
+    fallback_str = os.getenv("LLM_INTERNALIZE_FALLBACK", "")
+    for entry in [s.strip() for s in fallback_str.split(",") if s.strip()]:
+        c, m = _build_client(entry)
+        if c:
+            candidates.append((c, m))
+    return candidates
+
+
+def _should_internalize_fallback(exc: Exception) -> bool:
+    """判断内化 LLM 调用失败是否应切换到备用模型。"""
+    msg = str(exc).lower()
+    return any(k in msg for k in _FALLBACK_ERRORS)
+
+
+def _call_with_fallback(fn, query, candidates, *args):
+    """
+    用 candidates 列表依次尝试调用 fn(query, *args, client, model)。
+    遇到额度/限流类错误自动切换下一个模型，其他错误直接抛出。
+    所有候选都失败时抛出最后一个异常。
+    """
+    last_exc = None
+    for c, m in candidates:
+        try:
+            return fn(query, *args, c, m)
+        except Exception as e:
+            if _should_internalize_fallback(e):
+                _logger.warning("internalize fallback: %s -> next candidate, reason: %s", m, e)
+                last_exc = e
+                continue
+            raise
+    raise last_exc
+
+
 def _internalize(query: str, results: list, client, model: str) -> None:
-    """Step 1 ~ Step 5 完整流程。"""
+    """Step 1 ~ Step 5 完整流程，内部自动 fallback。"""
+    candidates = _build_internalize_candidates(client, model)
 
     # Step 1 — 分类判断：实时类直接跳过
-    if _is_realtime(query, results, client, model):
+    if _call_with_fallback(_is_realtime, query, candidates, results):
         return
 
     # Step 2 — LLM 提炼
-    refined = _refine(query, results, client, model)
+    refined = _call_with_fallback(_refine, query, candidates, results)
     if not refined:
         return
 
+    # Step 2.5 — 质量过滤（规则 + 可选 LLM 打分，judge 有自己的 fallback）
+    judge_candidates = _build_judge_candidates()
+    if not _is_quality_refined(refined, query, judge_candidates):
+        return
+
     # Step 3 — 路由到目标文档
-    filepath = _route(query, refined, client, model)
+    filepath = _call_with_fallback(_route, query, candidates, refined)
 
     # Step 4 — 增量写入文档
     _append_to_file(filepath, query, refined)
@@ -128,6 +227,95 @@ def _is_realtime(query: str, results: list, client, model: str) -> bool:
     )
     answer = response.choices[0].message.content.strip().lower()
     return "yes" in answer
+
+
+# ──────────────────────────────────────────────
+# Step 2.5 — 质量过滤
+# ──────────────────────────────────────────────
+
+# 提炼失败时 LLM 常见的拒绝短语
+_REFUSAL_PHRASES = [
+    "无法提炼",
+    "无相关内容",
+    "没有相关内容",
+    "无法从",
+    "未找到相关",
+    "没有找到相关",
+    "无有效信息",
+    "无法获取",
+    "无内容可提炼",
+    "抱歉，没有",
+    "抱歉，无法",
+    "sorry, i cannot",
+    "no relevant content",
+    "no useful information",
+    "unable to extract",
+]
+
+def _similarity_ratio(a: str, b: str) -> float:
+    """计算两个字符串的字符级重叠比例（简单实现，不依赖外部库）。"""
+    if not a or not b:
+        return 0.0
+    set_a = set(a)
+    set_b = set(b)
+    intersection = set_a & set_b
+    return len(intersection) / max(len(set_a), len(set_b))
+
+
+def _is_quality_refined(refined: str, query: str, judge_candidates: list = None) -> bool:
+    """
+    返回 True 表示提炼结果质量合格，可以继续内化。
+
+    判断流程：
+    1. 硬规则：拒绝语检测
+    2. 硬规则：与 query 重复度检测
+    3. LLM 打分：遍历 judge_candidates，额度/限流错误自动切换下一个，
+                 全部失败时降级为硬规则通过（不阻断内化）
+    """
+    # 规则 1：拒绝语检测
+    lower = refined.lower()
+    for phrase in _REFUSAL_PHRASES:
+        if phrase.lower() in lower:
+            _logger.info("internalization skipped (refusal): query=%r phrase=%r", query, phrase)
+            return False
+
+    # 规则 2：与 query 重复度过高
+    ratio = _similarity_ratio(refined[:200], query)
+    if ratio >= 0.85:
+        _logger.info("internalization skipped (too similar): query=%r ratio=%.2f", query, ratio)
+        return False
+
+    # 规则 3：LLM 打分（有自己的 fallback，全部失败时降级通过）
+    if judge_candidates:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是知识库质量审核员。判断以下内容是否值得写入知识库。\n"
+                    "值得写入的标准：包含有价值的技术知识、概念解释、方法论等。\n"
+                    "不值得写入的标准：广告、导航链接、无实质内容的摘要、与主题无关的内容。\n"
+                    "只回答 yes 或 no，不要解释。"
+                ),
+            },
+            {"role": "user", "content": f"搜索词：{query}\n\n提炼内容：\n{refined[:500]}"},
+        ]
+        for jc, jm in judge_candidates:
+            try:
+                resp = jc.chat.completions.create(model=jm, temperature=0, messages=messages)
+                answer = resp.choices[0].message.content.strip().lower()
+                if "no" in answer and "yes" not in answer:
+                    _logger.info("internalization skipped (llm judge=no): query=%r model=%s", query, jm)
+                    return False
+                break  # 成功拿到判断结果，不再尝试下一个
+            except Exception as e:
+                if _should_internalize_fallback(e):
+                    _logger.warning("llm judge fallback: %s -> next, reason: %s", jm, e)
+                    continue
+                # 非额度类错误，降级为硬规则通过
+                _logger.warning("llm judge error, rule-only fallback: %s", e)
+                break
+
+    return True
 
 
 # ──────────────────────────────────────────────

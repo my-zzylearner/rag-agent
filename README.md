@@ -1,8 +1,8 @@
 # 🔍 AI Search Agent
 
-一个结合 **RAG（检索增强生成）** 和 **Web Search** 的智能问答 Agent，展示 AI 搜索工程的核心技术链路。
+一个结合 **RAG（检索增强生成）** 和 **Web Search** 的智能问答 Agent，由阿里百炼 Qwen 驱动，展示 AI 搜索工程的核心技术链路。
 
-**[👉 在线体验 Demo]()**  ← 部署后填入链接
+**[👉 在线体验 Demo](https://rag-search-agent.streamlit.app)**
 
 ---
 
@@ -11,35 +11,46 @@
 ```
 用户提问
     ↓
-Agent（文心 ERNIE · OpenAI 兼容接口 + Tool Calling）
+Agent（阿里百炼 Qwen · OpenAI 兼容接口 + Tool Calling）
     ├── 📚 Tool 1: 本地知识库检索（RAG）
-    │       文档 → Chunking → Embedding → ChromaDB → 向量检索
+    │       文档 → 语义 Chunking → Embedding → ChromaDB → 向量检索
     └── 🌐 Tool 2: 实时网络搜索（Tavily）
             ↓ 自动内化
-        搜索结果 → Chunking → Embedding → ChromaDB（web_cache）
+        搜索结果 → LLM 提炼 → 结构化 Markdown → ChromaDB + data/docs/
     ↓
-融合多路结果 → 生成回答 + 标注来源
+融合多路结果 → 流式生成回答 + 标注来源
 ```
 
 ## 技术栈
 
 | 组件 | 技术选型 | 说明 |
 |------|---------|------|
-| LLM | 文心 ERNIE-Speed-Pro | OpenAI 兼容接口，Tool Calling |
+| LLM | 阿里百炼 Qwen（可配置） | OpenAI 兼容接口，Tool Calling，支持多模型 fallback |
 | Embedding | all-MiniLM-L6-v2 | 本地运行，无需 API |
-| 向量库 | ChromaDB | 持久化存储，cosine 相似度检索 |
+| 向量库 | ChromaDB | cosine 相似度检索，语义 chunk 切分 |
 | 网络搜索 | Tavily API | 实时互联网搜索 |
-| 前端 | Streamlit | 展示 Agent 思考过程和检索来源 |
+| 前端 | Streamlit | 流式输出，展示 Agent 思考过程和检索来源 |
 
-## 核心技术点
+## 核心功能
 
-- **Chunking 策略**：chunk_size=512，overlap=64，保留跨块上下文
-- **多路召回**：知识库语义检索 + 实时网络搜索，互补覆盖
-- **智能工具路由**：实时信息直接走网络搜索，专业知识优先查本地知识库，知识库无结果时自动降级到网络
-- **知识自动内化**：网络搜索结果自动写入 ChromaDB，同类问题下次直接本地检索，upsert 去重
-- **停止控制**：Agent 思考中可随时中止，已有中间结果保留展示
-- **来源溯源**：每条回答标注检索片段来源，提高可信度
-- **循环保护**：最大工具调用轮次限制，防止死循环
+**检索与生成**
+- **智能工具路由**：实时信息（天气/股价）直接走网络搜索，专业知识优先查本地知识库，无结果时自动降级
+- **流式输出**：LLM 回答逐 token 流式渲染，▌光标指示生成中
+- **语义 Chunking**：按段落边界切分（MAX_CHUNK_SIZE=800），避免截断表格和代码块
+- **来源溯源**：参考来源展示相关度评分，过滤低相关度结果，query 关键词高亮
+
+**知识自动内化**
+- 网络搜索结果经 LLM 提炼为结构化 Markdown，异步写入 `data/docs/`
+- frontmatter 动态路由，自动归类到最相关的知识文档
+- ChromaDB 实时重索引，下次同类问题直接本地检索
+- 侧边栏展示最近内化记录
+
+**工程能力**
+- **多模型 fallback**：`LLM_FALLBACK` 环境变量配置备用模型，额度不足/限流时自动切换并提示
+- **停止控制**：Agent 运行中可随时中止，已有中间结果保留展示
+- **运行时调参**：侧边栏滑块实时调整检索条数和工具调用轮次，无需重启
+- **统一日志**：关键路径 ERROR 日志，`DEBUG=true` 输出详细链路日志
+- **.env 热重载**：修改配置后下次提问即生效，无需重启
 
 ## 本地运行
 
@@ -55,62 +66,53 @@ pip install -r requirements.txt
 
 # 3. 配置 API Key
 cp .env.example .env
-# 编辑 .env，填入你的 QIANFAN_API_KEY 和 TAVILY_API_KEY
+# 编辑 .env，填入 DASHSCOPE_API_KEY 和 TAVILY_API_KEY
 
 # 4. 启动
 streamlit run app.py
 ```
 
-> **注意事项**
-> - **首次启动需等待 2~3 分钟**：sentence-transformers 模型（~90MB）会自动下载到本地缓存，后续启动秒开
-> - **首次提问需等待约 30 秒**：知识库向量化建立索引，完成后页面会提示"知识库已建立"
-> - 后续所有操作均为正常响应速度，无需再等待
+> **首次启动**：sentence-transformers 模型（~90MB）自动下载，约需 2~3 分钟，后续秒开。
 
 ## 项目结构
 
 ```
 rag-agent/
-├── app.py              # Streamlit 前端（含停止按钮）
+├── app.py                          # Streamlit 前端
 ├── agent/
-│   ├── agent.py        # Agent 主循环（Tool Calling + 停止控制）
-│   └── tools.py        # 工具定义与执行（含知识内化）
+│   ├── agent.py                    # Agent 主循环（Tool Calling + 多模型 fallback + 流式输出）
+│   ├── tools.py                    # 工具定义与执行（含知识内化触发）
+│   └── logger.py                   # 结构化日志（trace_id、JSON 格式）
 ├── rag/
-│   ├── indexer.py      # 文档加载、Chunking、Embedding、入库、增量写入
-│   └── retriever.py    # 向量检索
-├── data/docs/          # 知识库文档（AI 搜索相关）
-└── design/             # 方案设计文档
+│   ├── indexer.py                  # 文档加载、语义 Chunking、Embedding、入库
+│   ├── retriever.py                # 向量检索
+│   └── knowledge_internalizer.py  # LLM 提炼 + 文档增量写入 + 质量过滤
+├── eval/
+│   ├── evaluate.py                 # RAGAS 离线评估脚本（自动生成问答对 + 评测报告）
+│   ├── questions.json              # 评测问答对
+│   └── report.md                   # 最新评测报告
+├── utils/
+│   ├── logger.py                   # 统一日志模块（RotatingFileHandler + stderr）
+│   └── gist_store.py               # GitHub Gist 持久化（访问统计 + 留言板）
+├── tests/                          # 单元测试
+├── data/docs/                      # 知识库文档（含自动内化生成的文档）
+├── logs/                           # 运行日志（app.log，按大小轮转）
+└── design/                         # 方案设计文档
 ```
 
 ## 知识库内容
 
-- RAG 技术原理与优化策略
+- RAG 技术原理与 Chunking 策略
 - 向量数据库选型对比（Chroma/Pinecone/Milvus/Qdrant）
 - 搜索排序算法（BM25、向量检索、混合检索、Reranking）
-- LLM Agent 架构与 Function Calling 机制
+- LLM Agent 架构与 Harness 工程实践
 
 ## 测试
 
 ```bash
-# 快速测试（默认，跳过需要模型加载的用例，秒级完成）
+# 快速测试（跳过需要模型加载的用例）
 venv/bin/pytest tests/ -m "not slow"
 
-# 完整测试（包含 embedding 检索链路，首次运行需下载模型）
+# 完整测试（含 embedding 检索链路）
 venv/bin/pytest tests/ -m slow
 ```
-
-测试覆盖：
-- Chunking 逻辑（overlap、边界情况）
-- 知识库写入与去重
-- 向量检索结果格式与分数范围
-- Agent 工具描述格式（Function Calling 规范）
-- 工具异常入参处理
-
-## 面试延伸
-
-> 如果这个项目要上生产，你会怎么改？
-
-- **向量库**：Chroma → Qdrant/Milvus，支持亿级向量
-- **检索**：纯向量 → 混合检索（BM25 + 向量 + RRF 融合）
-- **Reranking**：加 Cross-Encoder 对召回结果重排
-- **知识库更新**：增量索引，避免全量重建
-- **评估**：接入 RAGAS 框架，持续监控 Faithfulness 和 Answer Relevancy

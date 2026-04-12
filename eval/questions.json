@@ -1,0 +1,97 @@
+[
+  {
+    "question": "在固定大小分块策略中，设置 chunk_overlap 的目的是什么？",
+    "ground_truth": "保留跨块的上下文信息，避免关键信息被切断。",
+    "source": "rag_introduction.md"
+  },
+  {
+    "question": "根据文本，长文档摘要任务推荐的 chunk_size 和 overlap 是多少？",
+    "ground_truth": "chunk_size=1024，overlap=128",
+    "source": "rag_introduction.md"
+  },
+  {
+    "question": "如何评估 RAG 效果？",
+    "ground_truth": "常用指标：Faithfulness（忠实度）、Answer Relevancy（答案相关性）、Context Recall（上下文召回率）。工具：RAGAS 框架。",
+    "source": "rag_introduction.md"
+  },
+  {
+    "question": "什么是 LLM Agent？",
+    "ground_truth": "LLM Agent 是以大语言模型为核心推理引擎，能够自主规划、调用外部工具、循环执行直到完成任务的系统。",
+    "source": "llm_agent_architecture.md"
+  },
+  {
+    "question": "根据文本，ReAct 框架是由哪家机构在什么时候提出的？",
+    "ground_truth": "由 Google 2022 年提出",
+    "source": "llm_agent_architecture.md"
+  },
+  {
+    "question": "根据文本内容，Multi-Agent 系统协作完成复杂任务的常见模式有哪些？",
+    "ground_truth": "主从模式、流水线模式、辩论模式",
+    "source": "llm_agent_architecture.md"
+  },
+  {
+    "question": "基于物品协同过滤算法的优点是什么？",
+    "ground_truth": "物品相似度相对稳定，扩展性好，适合电商等大规模场景。",
+    "source": "collaborative_filtering_user_item.md"
+  },
+  {
+    "question": "协同过滤算法主要分为哪两类？",
+    "ground_truth": "UserCF (基于用户) 和 ItemCF (基于物品)",
+    "source": "recommendation_system_cf_comparison.md"
+  },
+  {
+    "question": "协同过滤算法中，针对隐式反馈场景推荐使用哪种相似度计算方法？",
+    "ground_truth": "Jaccard 相似系数",
+    "source": "collaborative_filtering_similarity.md"
+  },
+  {
+    "question": "根据文本，Chroma 向量数据库适用于哪些应用场景？",
+    "ground_truth": "原型开发、小型项目、本地 RAG demo",
+    "source": "vector_databases.md"
+  },
+  {
+    "question": "根据选型建议，生产小规模场景推荐使用哪个工具？",
+    "ground_truth": "Qdrant（性能好，自托管）",
+    "source": "vector_databases.md"
+  },
+  {
+    "question": "IVF 索引的主要缺点是什么？",
+    "ground_truth": "需要训练阶段，召回率略低于 HNSW",
+    "source": "vector_databases.md"
+  },
+  {
+    "question": "项目评估的关键指标（KPI）包含哪几个类别？",
+    "ground_truth": "进度指标、成本指标、质量指标、效益指标。",
+    "source": "project_evaluation.md"
+  },
+  {
+    "question": "调试 Agent 行为时，应优先检查什么？",
+    "ground_truth": "工具定义",
+    "source": "agent-harness-engineer.md"
+  },
+  {
+    "question": "根据文本描述，该系统的控制流包含哪几个阶段，循环终止的条件是什么？",
+    "ground_truth": "感知 -> 决策 -> 行动 -> 反馈四个阶段不断循环，直到模型返回纯文本为止",
+    "source": "agent-harness-engineer.md"
+  },
+  {
+    "question": "根据文本，Anthropic 是如何区分 Workflow 和 Agent 的？",
+    "ground_truth": "执行路径由代码预先写死的是 Workflow，由 LLM 动态决定下一步的是 Agent",
+    "source": "agent-harness-engineer.md"
+  },
+  {
+    "question": "BM25 算法的缺点是什么？",
+    "ground_truth": "无法理解语义，'汽车'和'轿车'被视为完全不同的词",
+    "source": "search_algorithms.md"
+  },
+  {
+    "question": "根据文本，BM25 和向量检索分别擅长处理什么内容？",
+    "ground_truth": "BM25 擅长：精确关键词、专有名词、代码、数字；向量检索擅长：语义理解、同义词、模糊查询",
+    "source": "search_algorithms.md"
+  },
+  {
+    "question": "在评估指标中，哪个指标被描述为考虑相关性程度和位置的综合指标且最常用？",
+    "ground_truth": "NDCG（Normalized DCG）",
+    "source": "search_algorithms.md"
+  }
+]

@@ -177,7 +177,7 @@ def run_agent(
             retry_event = _next_candidate(e)
             if retry_event:
                 yield retry_event
-                continue  # 用新模型重跑本轮，走完整 tool calling 流程
+                continue  # 用新模型重跑本轮
             yield {"type": "error", "content": f"调用 LLM API 失败: {str(e)}", "trace_id": trace_id}
             return
 
@@ -192,6 +192,7 @@ def run_agent(
                     model=model,
                     messages=messages,
                     stream=True,
+                    timeout=60,
                 )
                 for chunk in stream:
                     if stop_event and stop_event.is_set():
@@ -208,7 +209,7 @@ def run_agent(
                 retry_event = _next_candidate(e)
                 if retry_event:
                     yield retry_event
-                    continue  # 重跑本轮，新模型重新决策 + tool calling
+                    continue
                 yield {"type": "error", "content": f"调用 LLM API 失败: {str(e)}", "trace_id": trace_id}
             return
 
@@ -255,6 +256,7 @@ def run_agent(
                     model=model,
                     messages=messages,
                     stream=True,
+                    timeout=60,
                 )
                 for chunk in stream:
                     if stop_event and stop_event.is_set():

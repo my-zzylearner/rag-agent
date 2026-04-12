@@ -23,6 +23,7 @@ load_dotenv(_env_file)
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
+from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
 
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(
@@ -104,6 +105,11 @@ if "prefill_input" not in st.session_state:
     st.session_state.prefill_input = ""
 if "agent_running" not in st.session_state:
     st.session_state.agent_running = False
+
+# 访问计数：每个 session 只计一次
+if "visit_counted" not in st.session_state:
+    st.session_state.visit_counted = True
+    gist_increment("visits")
 
 # 每次 rerun 都清除停止信号，避免残留
 # 注意：agent_running 不在这里重置，由 Agent 执行块自己管理
@@ -208,8 +214,6 @@ if prompt:
         final_answer = ""
         all_sources = []
         was_stopped = False
-        answer_placeholder = st.empty()
-
         steps = []  # 记录思考过程，rerun 后可重建
 
         with st.status("Agent 思考中...", expanded=True) as status:
@@ -242,12 +246,15 @@ if prompt:
                         all_sources.extend(results)
 
                 elif event["type"] == "answer_chunk":
+                    if not final_answer:
+                        answer_placeholder = st.empty()
                     final_answer += event["content"]
                     answer_placeholder.markdown(final_answer + "▌")
 
                 elif event["type"] == "answer":
                     stop_placeholder.empty()
                     status.update(label="完成", state="complete", expanded=False)
+                    gist_increment("queries")
 
                 elif event["type"] == "retry":
                     reason = event.get("reason_label", "调用失败")
@@ -270,12 +277,11 @@ if prompt:
                     stop_placeholder.empty()
                     status.update(label="出错", state="error", expanded=True)
 
-        # 流结束后在 status 外部最终渲染（去掉光标）
         if final_answer:
-            answer_placeholder.markdown(final_answer)
+            st.markdown(final_answer)
             _render_sources(all_sources, query=prompt)
         elif was_stopped:
-            answer_placeholder.markdown("_已停止_")
+            st.markdown("_已停止_")
 
         st.session_state.messages.append({
             "role": "assistant",
@@ -289,17 +295,36 @@ if prompt:
 
 # ── 侧边栏 ────────────────────────────────────────────────
 with st.sidebar:
+    # 访问统计 + 留言板（需配置 GITHUB_TOKEN 和 GIST_ID）
+    _stats = gist_load()
+    if _stats is not None:
+        _c1, _c2 = st.columns(2)
+        _c1.metric("👥 访问人数", _stats.get("visits", 0))
+        _c2.metric("🔍 查询次数", _stats.get("queries", 0))
+        with st.expander("💬 留言板", expanded=False):
+            _fb_input = st.text_area("写下你的建议或反馈", key="fb_input", height=80)
+            if st.button("提交留言", use_container_width=True, disabled=not _fb_input):
+                gist_add_feedback(_fb_input.strip())
+                st.toast("感谢你的反馈！")
+                st.rerun()
+            _feedbacks = _stats.get("feedback", [])
+            if _feedbacks:
+                st.caption("最近留言：")
+                for _fb in reversed(_feedbacks[-3:]):
+                    st.caption(f"🗨️ {_fb['time']}　{_fb['content'][:40]}")
+
     st.divider()
     st.header("关于本项目")
     st.markdown("""
-**AI Search Agent** 是一个基于 RAG + Web Search 的智能问答系统，融合本地向量检索与实时网络搜索，自动路由到最合适的信息源。
+**AI Search Agent** 是一个工程化的 RAG + Web Search 智能问答系统。
 
-**核心能力：**
-- 🔀 智能路由：由阿里百炼 Qwen 驱动决策，实时信息走 Web Search，专业知识走 RAG，自动判断无需手动切换
-- 🧠 知识自动内化：Web Search 结果经 LLM 提炼后增量写入知识库，越用越聪明
-- 📎 来源可溯：每条回答附带参考来源和相关度评分
-- ⏹ 随时可停：回答过程中可中断，已获取的结果不丢失
-- 🔧 运行时调参：无需重启即可调整检索条数和工具调用轮次
+不同于把搜索路径写死的 Workflow，这里的核心是一个真正的 **Agent Loop**：每轮由 LLM 自主决定是查本地知识库还是联网搜索，工具调用结果再反馈给 LLM 决定下一步，循环直到给出答案。
+
+**工程亮点：**
+- 🛡️ **多模型自动兜底**：配置主模型 + 备用模型列表，主模型额度耗尽或不可用时无感切换，不中断对话
+- 🧠 **知识自动内化**：每次联网搜索后，结果异步经 LLM 提炼写入本地知识库，下次同类问题优先命中本地，越用越快
+- 🔍 **请求全链路追踪**：每次对话生成唯一 trace_id，出错时直接展示给用户，对照后台日志可定位到具体哪一轮工具调用出了问题
+- 📊 **数据驱动评测**：离线跑 RAGAS 评估检索质量（Faithfulness / Context Recall），有数字才能判断改动是否真的有效
     """)
 
     # 历史输入记录（点击直接重发，最多显示最近 10 条）
@@ -328,7 +353,7 @@ with st.sidebar:
                 st.divider()
                 st.caption("最近内化：")
                 for _e in _entries:
-                    st.caption(f"  {_e['time']} · {_e['query'][:30]} → {_e['file']}")
+                    st.caption(f"  {_e['time']} · 📄 {_e['file']}")
         except Exception:
             pass
 

@@ -22,6 +22,7 @@ _logger = get_logger(__name__)
 MAX_CHUNK_SIZE = 800  # 每个 chunk 的最大字符数
 COLLECTION_NAME = "rag_docs"
 WEB_CACHE_LIMIT = 200  # web_cache 条目上限，超出时删除最旧的
+WEB_CACHE_LIMIT_DAYS = 7  # web_cache 条目 TTL（天），超过此天数的条目视为过期
 # 用绝对路径，避免不同调用方工作目录不同导致 ChromaDB "different settings" 冲突
 CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chroma_db")
 
@@ -274,5 +275,19 @@ def add_chunks(chunks: List[Dict]) -> int:
         web_pairs.sort(key=lambda x: x[1].get("added_at", 0))
         to_delete = [id_ for id_, _ in web_pairs[: len(web_pairs) - WEB_CACHE_LIMIT]]
         collection.delete(ids=to_delete)
+        # 数量删除后重新获取最新列表，避免下面的 TTL 检查对已删条目重复操作
+        result = collection.get(include=["metadatas"])
+        web_pairs = [
+            (id_, meta)
+            for id_, meta in zip(result["ids"], result["metadatas"])
+            if id_.startswith("web_")
+        ]
+
+    # TTL 清理：删除 added_at 超过 WEB_CACHE_LIMIT_DAYS 天的过期条目
+    threshold = int(time.time()) - WEB_CACHE_LIMIT_DAYS * 24 * 3600
+    expired = [id_ for id_, meta in web_pairs if meta.get("added_at", 0) < threshold]
+    if expired:
+        collection.delete(ids=expired)
+        _logger.info("add_chunks: removed %d expired web_cache entries (TTL=%d days)", len(expired), WEB_CACHE_LIMIT_DAYS)
 
     return len(texts)

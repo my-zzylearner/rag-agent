@@ -82,23 +82,54 @@ metadata: {"source": url, "type": "web_cache"}
 ## 待解决问题
 
 - web_cache 条目积累后的清理机制 — 目前无过期策略，长期使用后知识库会持续增长
-- 内化内容质量控制 — Tavily 返回的网页摘要质量参差不齐，暂未过滤
+- 内化内容质量控制 — 质量过滤（< 80 字/拒绝语跳过）尚未实现，Tavily 返回的网页摘要质量参差不齐
+
+## 已完成功能
+
+| # | 功能 | 说明 |
+|---|------|------|
+| 1 | 停止控制 | threading.Event 信号机制，Agent 运行中可随时中止，已有中间结果保留展示 |
+| 2 | 联网搜索路由修复 | SYSTEM_PROMPT 增加明确路由规则，实时信息直接走 search_web |
+| 3 | 知识自动内化（web_cache） | 搜索结果自动写入 ChromaDB，upsert 去重 |
+| 4 | 历史输入重发 | 侧边栏点击历史 query 直接重发 |
+| 5 | 访问密码校验 | 密码存 st.secrets/APP_PASSWORD，未配置不拦截 |
+| 6 | 知识内化升级（LLM 提炼） | 搜索结果异步经 LLM 提炼后增量写入 data/docs/，frontmatter 动态路由 |
+| 7 | 运行时参数配置 | 侧边栏滑块调整 max_tool_rounds / top_k，无需重启 |
+| 8 | 工具轮次上限优化 | 达到上限时强制生成最终回答，不再报错 |
+| 9 | ChromaDB 路径绝对化 | 基于 `__file__` 绝对路径 + lru_cache 进程级单例 |
+| 10 | 来源展示统一 | `_render_sources()` 统一渲染，历史消息和当前回答共用 |
+| 11 | 移动端适配 | layout="centered" |
+| 12 | 知识内化状态反馈 | 侧边栏展示最近 5 条内化记录 |
+| 13 | 相关度阈值过滤 | 过滤 < 0.3 的来源，不展示低相关度结果 |
+| 14 | 回答流式输出 | stream=True，answer_chunk 逐 token yield，▌光标指示生成中 |
+| 15 | 搜索关键词高亮 | snippet 中匹配 query 词加粗，支持英文缩写单独提取 |
+| 16 | 语义 chunk 切分 | 按段落合并（MAX_CHUNK_SIZE=800），超长段落回退句子切分 |
+| 17 | web_cache 上限清理 | 超 200 条时按 added_at 删最旧的 |
+| 18 | 冷启动进度展示 | 两阶段 status 展示：Embedding 模型加载 → 知识库检查 |
+| 19 | 多模型 fallback | LLM_FALLBACK 环境变量，额度不足/模型不存在时自动切换，UI 展示切换原因 |
+| 20 | 统一日志系统 | utils/logger.py，关键路径 ERROR 日志，DEBUG=true 输出详细日志 |
+| 21 | .env 热重载 | 每次 rerun 重新加载 .env，注释掉的变量实时失效 |
+| 22 | 思考过程持久化 | steps 字段存入 session_state，rerun 后历史消息用 expander 重建展示 |
+| 23 | 停止按钮自动隐藏 | 完成/停止/出错后 stop_placeholder.empty() 隐藏按钮 |
 
 ## TODO（待实现）
 
-| # | 功能 | 状态 | 说明 |
-|---|------|------|------|
-| 1 | 来源展示统一 | ✅ 已完成 | 提取 `_render_sources()` 统一渲染，历史消息和当前回答共用 |
-| 2 | 移动端适配 | ✅ 已完成 | `layout="wide"` → `layout="centered"` |
-| 3 | 知识内化状态反馈 | ✅ 已完成 | 内化完成写 `.internalize_status.json`，侧边栏展示最近 5 条 |
-| 4 | `.env` 注释格式修复 | ✅ 已完成 | `;` 改为 `#`，消除 python-dotenv 解析警告 |
-| 5 | 相关度阈值过滤 | ✅ 已完成 | `_render_sources()` 内过滤 < 0.3 的结果，不展示低相关度来源 |
-| 6 | ChromaDB 持久化 | ⏳ 待实现 | Streamlit Cloud 每次冷启动需重建知识库，可考虑挂载外部存储或用云端向量库 |
-| 7 | 回答流式输出 | ✅ 已完成 | agent.py 改用 stream=True，answer_chunk 事件逐 token yield，app.py 用 st.empty() 占位符流式渲染，▌光标指示生成中 |
-| 8 | 搜索关键词高亮 | ✅ 已完成 | _render_sources() 增加 query 参数，对 snippet 中的 query 词大小写不敏感高亮（markdown 加粗） |
-| 9 | 语义 chunk 切分 | ✅ 已完成 | 改为按段落合并策略（MAX_CHUNK_SIZE=800），超长段落回退句子切分，避免截断表格和代码块 |
-| 10 | web_cache 上限清理 | ✅ 已完成 | metadata 加 added_at 时间戳，写入后超 200 条时按时间排序删最旧的 |
-| 11 | 冷启动优化 | ✅ 已完成 | 拆成两阶段：先 warm up embedder（含 encode 预热），再索引文档，两个 spinner 分别提示 |
+| # | 功能 | 优先级 | 状态 | 说明 |
+|---|------|--------|------|------|
+| 1 | 内化质量过滤 | 🔴 高 | ⏳ 待实现 | 提炼结果 < 80 字或含拒绝语时跳过；web_cache 条目 < 50 字时过滤 |
+| 2 | web_cache 老化清理 | 🔴 高 | ✅ 已完成 | TTL=7天，add_chunks 时删除过期条目；数量上限 200 保留 |
+| 3 | 内化匿名化 | 🔴 高 | ✅ 已完成 | 侧边栏只展示时间和文件名，不暴露用户原始 query |
+| 4 | 知识库评估（RAGAS） | 🟡 中 | ✅ 已完成 | eval/evaluate.py 离线评估，自动生成问题，输出 eval/report.md |
+| 5 | 混合检索 | 🟡 中 | ⏳ 待实现 | BM25 + 向量检索 + RRF 融合，提升稀疏关键词（缩写、专有名词）召回率 |
+| 6 | ChromaDB 持久化 | 🟡 中 | ⏳ 待实现 | Streamlit Cloud 冷启动重建知识库，考虑 Qdrant Cloud 或 Pinecone |
+| 7 | Reranking | 🟢 低 | ⏳ 待实现 | Cross-Encoder 重排召回结果，适合知识库规模较大后再加 |
+| 8 | 用户隔离 | 🟢 低 | ⏳ 待实现 | 内化内容目前全局共享，考虑按 session 隔离或管理员审核机制 |
+| 9 | UI 美化 | 🟢 低 | ⏳ 待实现 | 页面视觉优化：配色、字体、间距、卡片样式；设计专属图标 |
+| 10 | 工具结构化错误 | 🔴 高 | ⏳ 待实现 | search_knowledge_base 空结果时给出修正建议（如"建议调用 search_web 继续检索"），减少 Agent 直接回答"未找到"的情况 |
+| 11 | 确定性验收基线 | 🔴 高 | ⏳ 待实现 | 为核心场景（天气/RAG原理/协同过滤等）建立代码评分器测试用例，改 prompt 或换模型后能自动检测退化 |
+| 12 | 上下文分层管理 | 🟡 中 | ⏳ 待实现 | system prompt 拆分为常驻层（身份/约束）+ 按需加载层（路由规则/领域知识），防止 Context Rot |
+| 13 | 多轮对话记忆压缩 | 🟡 中 | ⏳ 待实现 | messages[] 超 token 阈值时自动摘要压缩，防止长对话后决策质量下降 |
+| 14 | 评测环境隔离 | 🟡 中 | ⏳ 待实现 | eval/evaluate.py 使用独立 ChromaDB 实例，不复用生产知识库，保证评测结果稳定可重现 |
 
 ### 6. 知识内化升级（LLM 提炼 + 文档增量写入）
 
@@ -193,7 +224,13 @@ yield {"type": "answer", "content": final_resp.choices[0].message.content}
 - 2026-04-12: fallback 触发条件扩展为 _should_fallback()，覆盖 model_not_found/404/无权限等场景，提示文案动态生成
 - 2026-04-12: status 框思考过程持久化到 session_state（steps 字段），rerun 后历史消息用 expander 重建展示
 - 2026-04-12: agent 运行中 slider 改为静态文字，防止拖动触发 rerun 中断 agent
+- 2026-04-12: web_cache TTL 7天老化清理、内化展示匿名化（只显示文件名）；内化质量过滤未实现
 - 2026-04-12: 停止按钮在完成/停止/出错后用 stop_placeholder.empty() 隐藏
 - 2026-04-12: system prompt 增加禁止编造 URL/链接约束，防止模型幻觉生成假参考资料
 - 2026-04-12: 主页面副标题 ERNIE 改为 Qwen，与当前 LLM 配置一致
 - 2026-04-12: Streamlit Cloud 改用 Python 3.10，移除 PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python（该 workaround 仅针对 3.14 C 扩展兼容问题，3.10 不需要）
+- 2026-04-12: 新增访问统计 + 留言板（GitHub Gist 持久化），侧边栏顶部展示访问人数/查询次数，留言板收集优化建议；新增 utils/gist_store.py 封装 Gist 读写
+- 2026-04-12: 修复 .env 热重载在 Streamlit Cloud 上误清 secrets 的问题，改为检测 .env 文件存在时才 pop
+- 2026-04-12: _build_candidates() 加 lru_cache 进程级缓存，避免每次请求重建 OpenAI client
+- 2026-04-12: 新增 eval/evaluate.py 离线评估脚本，自动从文档生成问答对，RAGAS 评估 Faithfulness/Answer Relevancy/Context Recall，输出 eval/report.md
+- 2026-04-12: 首次评估结果：Faithfulness=0.948（良好），Context Recall=0.250（偏低），Answer Relevancy=nan（embedding调用失败待修复）；Context Recall 低的根本原因是向量检索召回率不足，混合检索（BM25+向量）可改善
