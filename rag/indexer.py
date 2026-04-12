@@ -8,16 +8,20 @@ import functools
 # 禁用 chromadb 遥测，必须在 import chromadb 之前设置
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
-# chromadb 依赖的 opentelemetry 用了旧版 protobuf 生成代码，需强制用纯 Python 实现
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import hashlib
+import re
+import time
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 import chromadb
 
-CHUNK_SIZE = 512      # 每个 chunk 的字符数
-CHUNK_OVERLAP = 64    # 相邻 chunk 的重叠字符数，保留上下文连贯性
+from utils.logger import get_logger
+
+_logger = get_logger(__name__)
+
+MAX_CHUNK_SIZE = 800  # 每个 chunk 的最大字符数
 COLLECTION_NAME = "rag_docs"
+WEB_CACHE_LIMIT = 200  # web_cache 条目上限，超出时删除最旧的
 # 用绝对路径，避免不同调用方工作目录不同导致 ChromaDB "different settings" 冲突
 CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chroma_db")
 
@@ -89,15 +93,55 @@ def load_documents(docs_dir: str) -> List[Dict]:
 
 
 def chunk_text(text: str, source: str) -> List[Dict]:
-    """将长文本切成带 overlap 的 chunks"""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + CHUNK_SIZE
-        chunk = text[start:end]
-        if chunk.strip():
-            chunks.append({"text": chunk, "source": source})
-        start += CHUNK_SIZE - CHUNK_OVERLAP
+    """按语义边界切分文本：优先在段落处切，单段过长时回退到句子级别。"""
+
+    def _split_long_paragraph(para: str) -> List[str]:
+        """单个段落超过 MAX_CHUNK_SIZE 时，按句子边界拆分。"""
+        sentences = re.split(r'(?<=[。！？\n])', para)
+        parts: List[str] = []
+        current = ""
+        for sent in sentences:
+            if len(current) + len(sent) <= MAX_CHUNK_SIZE:
+                current += sent
+            else:
+                if current.strip():
+                    parts.append(current.strip())
+                current = sent
+        if current.strip():
+            parts.append(current.strip())
+        return parts if parts else [para]
+
+    # 按双换行切成段落
+    paragraphs = re.split(r'\n\n+', text)
+
+    chunks: List[Dict] = []
+    current = ""
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        if len(para) > MAX_CHUNK_SIZE:
+            # 先把已积累内容入库
+            if current.strip():
+                chunks.append({"text": current.strip(), "source": source})
+                current = ""
+            # 长段落拆成句子级 chunks
+            for part in _split_long_paragraph(para):
+                chunks.append({"text": part, "source": source})
+        elif len(current) + len(para) + 2 <= MAX_CHUNK_SIZE:
+            # +2 预留段落间分隔符 \n\n
+            current = (current + "\n\n" + para) if current else para
+        else:
+            # 当前积累已满，先提交再开新 chunk
+            if current.strip():
+                chunks.append({"text": current.strip(), "source": source})
+            current = para
+
+    if current.strip():
+        chunks.append({"text": current.strip(), "source": source})
+
     return chunks
 
 
@@ -135,6 +179,7 @@ def index_documents(docs_dir: str = "./data/docs") -> int:
         metadatas=[{"source": s, "topic": m.get("topic", ""), "type": m.get("type", "knowledge_base")} for s, m in zip(sources, metas)],
     )
 
+    _logger.info("index_documents: indexed %d chunks from %d documents in %s", len(all_chunks), len(docs), docs_dir)
     return len(all_chunks)
 
 
@@ -204,7 +249,7 @@ def add_chunks(chunks: List[Dict]) -> int:
         ids.append(f"web_{uid}")
         texts.append(text)
         sources.append(source)
-        metadatas.append({"source": source, "type": "web_cache"})
+        metadatas.append({"source": source, "type": "web_cache", "added_at": int(time.time())})
 
     if not texts:
         return 0
@@ -217,4 +262,17 @@ def add_chunks(chunks: List[Dict]) -> int:
         documents=texts,
         metadatas=metadatas,
     )
+
+    # 超出上限时删除最旧的条目（web_ 前缀的 id 即为 web_cache 条目）
+    result = collection.get(include=["metadatas"])
+    web_pairs = [
+        (id_, meta)
+        for id_, meta in zip(result["ids"], result["metadatas"])
+        if id_.startswith("web_")
+    ]
+    if len(web_pairs) > WEB_CACHE_LIMIT:
+        web_pairs.sort(key=lambda x: x[1].get("added_at", 0))
+        to_delete = [id_ for id_, _ in web_pairs[: len(web_pairs) - WEB_CACHE_LIMIT]]
+        collection.delete(ids=to_delete)
+
     return len(texts)

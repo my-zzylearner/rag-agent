@@ -8,6 +8,9 @@ from tavily import TavilyClient
 
 from rag.retriever import retrieve
 from rag.indexer import add_chunks
+from utils.logger import get_logger
+
+_logger = get_logger(__name__)
 
 # 工具描述（OpenAI tool_call 格式）
 TOOLS = [
@@ -91,6 +94,7 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
             }
             for r in response.get("results", [])
         ]
+        _logger.info("search_web succeeded: query=%r result_count=%d", query, len(results))
 
         # 自动内化：将搜索结果写入知识库，实时性强的内容不内化
         _REALTIME_KEYWORDS = ("天气", "weather", "气温", "新闻", "stock", "股价", "今日", "今天", "明天", "实时")
@@ -118,6 +122,7 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
 
         return {"results": results}
     except Exception as e:
+        _logger.error("search_web failed: query=%r error=%s", query, e)
         return {"results": [], "message": f"搜索失败: {str(e)}"}
 
 

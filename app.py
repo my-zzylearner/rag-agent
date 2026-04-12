@@ -8,11 +8,12 @@ from dotenv import load_dotenv
 # 禁用 chromadb 遥测，避免 opentelemetry 依赖问题（强制覆盖，确保生效）
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
-# chromadb 依赖的 opentelemetry 用了旧版 protobuf 生成代码，需强制用纯 Python 实现
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import streamlit as st
 
-load_dotenv()
+# 每次 rerun 重新加载 .env，先清除旧值再覆盖，确保注释掉的变量也能失效
+for _k in ("LLM", "LLM_FALLBACK", "TAVILY_API_KEY", "QIANFAN_API_KEY", "DASHSCOPE_API_KEY", "DEBUG"):
+    os.environ.pop(_k, None)
+load_dotenv(override=True)
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
@@ -52,19 +53,41 @@ def _check_password() -> bool:
 _check_password()
 
 st.title("🔍 AI Search Agent")
-st.caption("RAG + Web Search · Powered by ERNIE & Tavily")
+st.caption("RAG + Web Search · Powered by Qwen & Tavily")
 
 # ── 初始化知识库（只在第一次运行时索引）────────────────────
-@st.cache_resource(show_spinner="正在加载知识库...")
+@st.cache_resource
+def _warm_up_embedder():
+    from rag.indexer import get_embedder
+    embedder = get_embedder()
+    embedder.encode(["warm up"])
+    return embedder
+
+
+@st.cache_resource
 def init_index():
     if not is_indexed():
-        count = index_documents("./data/docs")
-        return count
+        return index_documents("./data/docs")
     return None
 
-chunk_count = init_index()
-if chunk_count is not None:
-    st.toast(f"本地文档已索引，写入 {chunk_count} 个文本块", icon="✅")
+
+# 冷启动进度展示（只在第一次 session 时展示，之后静默初始化）
+if "startup_done" not in st.session_state:
+    with st.status("启动中...", expanded=True) as _startup_status:
+        st.write("⏳ 正在加载 Embedding 模型...")
+        _warm_up_embedder()
+        st.write("✅ Embedding 模型已就绪")
+        st.write("⏳ 正在检查知识库...")
+        chunk_count = init_index()
+        if chunk_count is not None:
+            st.write(f"✅ 知识库索引完成，写入 {chunk_count} 个文本块")
+        else:
+            st.write("✅ 知识库已就绪")
+        _startup_status.update(label="启动完成", state="complete", expanded=False)
+    st.session_state.startup_done = True
+else:
+    _warm_up_embedder()
+    chunk_count = init_index()
 
 # ── 状态初始化 ────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -81,9 +104,24 @@ if "agent_running" not in st.session_state:
 st.session_state.stop_event.clear()
 
 # ── 参数配置 + 知识库统计（侧边栏读取，需在 run_agent 调用前定义）──
-_slider_disabled = st.session_state.agent_running
-cfg_max_rounds = st.sidebar.slider("最大工具调用轮次", min_value=1, max_value=6, value=3, step=1, disabled=_slider_disabled)
-cfg_top_k = st.sidebar.slider("知识库检索条数", min_value=1, max_value=10, value=4, step=1, disabled=_slider_disabled)
+if "cfg_max_rounds" not in st.session_state:
+    st.session_state.cfg_max_rounds = 3
+if "cfg_top_k" not in st.session_state:
+    st.session_state.cfg_top_k = 4
+
+if st.session_state.agent_running:
+    # agent 运行中：显示静态文本，不渲染 slider（避免交互触发 rerun 中断 agent）
+    st.sidebar.caption(f"最大工具调用轮次：{st.session_state.cfg_max_rounds}")
+    st.sidebar.caption(f"知识库检索条数：{st.session_state.cfg_top_k}")
+    cfg_max_rounds = st.session_state.cfg_max_rounds
+    cfg_top_k = st.session_state.cfg_top_k
+else:
+    cfg_max_rounds = st.sidebar.slider("最大工具调用轮次", min_value=1, max_value=6,
+                                        value=st.session_state.cfg_max_rounds, step=1)
+    cfg_top_k = st.sidebar.slider("知识库检索条数", min_value=1, max_value=10,
+                                   value=st.session_state.cfg_top_k, step=1)
+    st.session_state.cfg_max_rounds = cfg_max_rounds
+    st.session_state.cfg_top_k = cfg_top_k
 
 # 知识库统计（get_collection 内部用 lru_cache 保证进程级单例）
 try:
@@ -112,8 +150,30 @@ if os.path.exists(_status_file):
 RELEVANCE_THRESHOLD = 0.3  # 低于此相关度的检索结果不展示
 
 
-def _render_sources(sources: list) -> None:
-    """统一渲染参考来源，过滤低相关度结果。"""
+def _render_sources(sources: list, query: str = "") -> None:
+    """统一渲染参考来源，过滤低相关度结果。若传入 query 则高亮关键词。"""
+    import re
+
+    def _highlight(text: str, q: str) -> str:
+        if not q:
+            return text
+        # 按空格拆词，同时把整个 query 也作为候选词
+        # 再用正则把连续英文/数字串单独提取（如 RAG、LLM 等缩写）
+        candidates = set(q.split())
+        candidates.add(q)
+        candidates.update(re.findall(r'[A-Za-z0-9]{2,}', q))
+        words = [w for w in candidates if len(w) >= 2]
+        # 按长度降序，避免短词先匹配破坏长词
+        words.sort(key=len, reverse=True)
+        for word in words:
+            text = re.sub(
+                f"({re.escape(word)})",
+                r"**\1**",
+                text,
+                flags=re.IGNORECASE,
+            )
+        return text
+
     filtered = [s for s in sources if s.get("relevance_score", 0) >= RELEVANCE_THRESHOLD]
     if not filtered:
         return
@@ -122,13 +182,20 @@ def _render_sources(sources: list) -> None:
             score = src.get("relevance_score", "")
             snippet = src["content"].replace("\n", " ").strip()[:120]
             st.caption(f"📄 {src['source']}　相关度 {score}")
-            st.text(snippet + "…")
+            st.markdown(_highlight(snippet, query) + "…")
 
 
 # 展示历史消息
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("steps"):
+            with st.expander("✅ 完成", expanded=False):
+                for step in msg["steps"]:
+                    if step["kind"] == "retry":
+                        st.warning(step["text"])
+                    else:
+                        st.write(step["text"])
         if msg.get("sources"):
             _render_sources(msg["sources"])
 
@@ -149,10 +216,13 @@ if prompt:
         final_answer = ""
         all_sources = []
         was_stopped = False
+        answer_placeholder = st.empty()
+
+        steps = []  # 记录思考过程，rerun 后可重建
 
         with st.status("Agent 思考中...", expanded=True) as status:
-            stop_col, _ = st.columns([1, 4])
-            with stop_col:
+            stop_placeholder = st.empty()
+            with stop_placeholder:
                 if st.button("⏹ 停止", key="stop_btn"):
                     st.session_state.stop_event.set()
 
@@ -167,36 +237,59 @@ if prompt:
                         "search_knowledge_base": "📚 检索知识库",
                         "search_web": "🌐 搜索网络",
                     }.get(event["tool"], event["tool"])
-                    st.write(f"{tool_label}：`{event['query']}`")
+                    line = f"{tool_label}：`{event['query']}`"
+                    st.write(line)
+                    steps.append({"kind": "tool_call", "text": line})
 
                 elif event["type"] == "tool_result":
                     results = event["result"].get("results", [])
-                    st.write(f"  → 获取到 {len(results)} 条结果")
+                    line = f"  → 获取到 {len(results)} 条结果"
+                    st.write(line)
+                    steps.append({"kind": "tool_result", "text": line})
                     if event["tool"] == "search_knowledge_base":
                         all_sources.extend(results)
 
+                elif event["type"] == "answer_chunk":
+                    final_answer += event["content"]
+                    answer_placeholder.markdown(final_answer + "▌")
+
                 elif event["type"] == "answer":
-                    final_answer = event["content"]
+                    stop_placeholder.empty()
                     status.update(label="完成", state="complete", expanded=False)
+
+                elif event["type"] == "retry":
+                    reason = event.get("reason_label", "调用失败")
+                    line = f"⚠️ {event['from']} {reason}，切换到 {event['to']} 重试..."
+                    st.warning(line)
+                    steps.append({"kind": "retry", "text": line})
+                    status.update(label="Agent 思考中...", expanded=True)
 
                 elif event["type"] == "stopped":
                     was_stopped = True
+                    stop_placeholder.empty()
                     status.update(label="已停止", state="error", expanded=False)
 
                 elif event["type"] == "error":
-                    st.error(event["content"])
+                    trace_id = event.get("trace_id", "")
+                    msg = event["content"]
+                    if trace_id:
+                        msg += f"\n\n`trace_id: {trace_id}`"
+                    st.error(msg)
+                    stop_placeholder.empty()
                     status.update(label="出错", state="error", expanded=True)
 
+        # 流结束后在 status 外部最终渲染（去掉光标）
         if final_answer:
-            st.markdown(final_answer)
-            _render_sources(all_sources)
+            answer_placeholder.markdown(final_answer)
+            _render_sources(all_sources, query=prompt)
         elif was_stopped:
-            st.markdown("_已停止_")
+            answer_placeholder.markdown("_已停止_")
 
         st.session_state.messages.append({
             "role": "assistant",
             "content": final_answer or ("_已停止_" if was_stopped else ""),
             "sources": all_sources,
+            "steps": steps,
         })
 
     st.session_state.agent_running = False

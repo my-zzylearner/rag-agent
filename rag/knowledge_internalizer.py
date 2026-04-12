@@ -11,6 +11,9 @@ import hashlib
 from datetime import datetime
 
 from rag.indexer import index_single_document
+from utils.logger import get_logger
+
+_logger = get_logger(__name__)
 
 # 内化状态文件路径，供 app.py 侧边栏读取
 STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", ".internalize_status.json")
@@ -56,8 +59,8 @@ def internalize_async(query: str, results: list, client, model: str) -> None:
     """入口函数，供外部在 daemon 线程中调用。所有异常静默处理。"""
     try:
         _internalize(query, results, client, model)
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.error("knowledge internalization failed: query=%r error=%s", query, e, exc_info=True)
 
 
 # ──────────────────────────────────────────────
@@ -87,6 +90,7 @@ def _internalize(query: str, results: list, client, model: str) -> None:
 
     # 写入状态文件，供侧边栏展示
     _write_status(query, os.path.basename(filepath))
+    _logger.info("knowledge internalization succeeded: query=%r file=%s", query, os.path.basename(filepath))
 
 
 # ──────────────────────────────────────────────
@@ -294,14 +298,14 @@ def _append_to_file(filepath: str, query: str, refined: str) -> None:
     """将提炼内容追加到目标文件，写入前检查重复。"""
     query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
 
-    # 检查文件末尾 2000 字符，避免重复追加同一 query
+    # 检查文件末尾 2000 字节，避免重复追加同一 query
     if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            f.seek(0, 2)  # 移到文件末尾
+        with open(filepath, "rb") as f:
+            f.seek(0, 2)
             size = f.tell()
             tail_start = max(0, size - 2000)
             f.seek(tail_start)
-            tail = f.read()
+            tail = f.read().decode("utf-8", errors="ignore")
         if query_hash in tail:
             return
         mode = "a"

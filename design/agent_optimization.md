@@ -75,15 +75,9 @@ metadata: {"source": url, "type": "web_cache"}
 
 ### 5. 访问密码校验
 
-**实现文件**：`app.py`（`_check_password()` 函数）
+**实现文件**：`app.py`
 
-**机制**：
-- 页面最顶部调用 `_check_password()`，未通过则 `st.stop()` 阻断后续渲染
-- 密码来源优先级：`st.secrets["APP_PASSWORD"]` > 环境变量 `APP_PASSWORD`
-- 未配置密码时直接放行（本地开发不受影响）
-- 通过后写入 `st.session_state.authenticated = True`，rerun 后不再拦截
-
-**局限**：无防暴力破解，但对"分享给认识的人"场景足够。
+页面入口增加密码拦截，适用于限定范围分享场景。密码配置方式见 `.env.example`。
 
 ## 待解决问题
 
@@ -100,6 +94,11 @@ metadata: {"source": url, "type": "web_cache"}
 | 4 | `.env` 注释格式修复 | ✅ 已完成 | `;` 改为 `#`，消除 python-dotenv 解析警告 |
 | 5 | 相关度阈值过滤 | ✅ 已完成 | `_render_sources()` 内过滤 < 0.3 的结果，不展示低相关度来源 |
 | 6 | ChromaDB 持久化 | ⏳ 待实现 | Streamlit Cloud 每次冷启动需重建知识库，可考虑挂载外部存储或用云端向量库 |
+| 7 | 回答流式输出 | ✅ 已完成 | agent.py 改用 stream=True，answer_chunk 事件逐 token yield，app.py 用 st.empty() 占位符流式渲染，▌光标指示生成中 |
+| 8 | 搜索关键词高亮 | ✅ 已完成 | _render_sources() 增加 query 参数，对 snippet 中的 query 词大小写不敏感高亮（markdown 加粗） |
+| 9 | 语义 chunk 切分 | ✅ 已完成 | 改为按段落合并策略（MAX_CHUNK_SIZE=800），超长段落回退句子切分，避免截断表格和代码块 |
+| 10 | web_cache 上限清理 | ✅ 已完成 | metadata 加 added_at 时间戳，写入后超 200 条时按时间排序删最旧的 |
+| 11 | 冷启动优化 | ✅ 已完成 | 拆成两阶段：先 warm up embedder（含 encode 预热），再索引文档，两个 spinner 分别提示 |
 
 ### 6. 知识内化升级（LLM 提炼 + 文档增量写入）
 
@@ -186,3 +185,15 @@ yield {"type": "answer", "content": final_resp.choices[0].message.content}
 - 2026-04-11: 知识内化路由升级为 frontmatter 动态路由；indexer 支持递归扫描和 frontmatter 解析
 - 2026-04-11: 工具调用轮次上限由报错改为强制生成最终回答；修复 ChromaDB 相对路径冲突
 - 2026-04-12: 完成 TODO 1-5：来源展示统一、移动端适配、知识内化状态反馈、.env 注释格式、相关度阈值过滤
+- 2026-04-12: 完成 TODO 7-11：回答流式输出、关键词高亮、语义 chunk 切分、web_cache 上限清理、冷启动优化
+- 2026-04-12: 禁用 ChromaDB 遥测（ANONYMIZED_TELEMETRY/CHROMA_TELEMETRY=False），修复 opentelemetry protobuf 冲突（PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python）
+- 2026-04-12: 升级 sentence-transformers>=3.0.0、protobuf>=3.20.0,<4.0.0，兼容 Streamlit Cloud Python 3.14 环境
+- 2026-04-12: 新增多模型 fallback 机制（LLM_FALLBACK 环境变量），额度不足/模型不存在/限流时自动切换，UI 展示切换原因
+- 2026-04-12: 新增统一日志模块 agent/logger.py，每次请求生成 trace_id，ERROR 默认输出，DEBUG=true 时输出详细日志；error 事件携带 trace_id 展示给用户
+- 2026-04-12: fallback 触发条件扩展为 _should_fallback()，覆盖 model_not_found/404/无权限等场景，提示文案动态生成
+- 2026-04-12: status 框思考过程持久化到 session_state（steps 字段），rerun 后历史消息用 expander 重建展示
+- 2026-04-12: agent 运行中 slider 改为静态文字，防止拖动触发 rerun 中断 agent
+- 2026-04-12: 停止按钮在完成/停止/出错后用 stop_placeholder.empty() 隐藏
+- 2026-04-12: system prompt 增加禁止编造 URL/链接约束，防止模型幻觉生成假参考资料
+- 2026-04-12: 主页面副标题 ERNIE 改为 Qwen，与当前 LLM 配置一致
+- 2026-04-12: Streamlit Cloud 改用 Python 3.10，移除 PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python（该 workaround 仅针对 3.14 C 扩展兼容问题，3.10 不需要）
