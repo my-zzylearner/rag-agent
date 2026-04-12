@@ -15,8 +15,10 @@ import json
 import threading
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+_CST = timezone(timedelta(hours=8))
 
 _FILENAME = "rag_agent_stats.json"
 _lock = threading.Lock()
@@ -81,24 +83,28 @@ def save(data: dict) -> None:
 
 
 def increment(field: str) -> None:
-    """原子性地将某个计数字段 +1 并异步写回。"""
+    """原子性地将某个计数字段 +1 并异步写回。load 失败时跳过，不用空数据覆盖。"""
     if not _enabled():
         return
     with _lock:
-        data = load() or {"visits": 0, "queries": 0, "feedback": []}
+        data = load()
+        if data is None:
+            return  # 读取失败，跳过，避免空数据覆盖 feedback
         data[field] = data.get(field, 0) + 1
         save(data)
 
 
 def add_feedback(content: str) -> None:
-    """追加一条留言并异步写回。"""
+    """追加一条留言并异步写回。load 失败时跳过，不用空数据覆盖。"""
     if not _enabled():
         return
     with _lock:
-        data = load() or {"visits": 0, "queries": 0, "feedback": []}
+        data = load()
+        if data is None:
+            return  # 读取失败，跳过，避免空数据覆盖已有留言
         data.setdefault("feedback", []).append({
             "content": content,
-            "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            "time": datetime.now(_CST).strftime("%Y-%m-%d %H:%M"),
         })
         # 只保留最新 50 条
         data["feedback"] = data["feedback"][-50:]

@@ -23,10 +23,7 @@ load_dotenv(_env_file)
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
-# from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
-def gist_load(): return None
-def gist_increment(_): pass
-def gist_add_feedback(_): pass
+from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
 
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(
@@ -113,6 +110,8 @@ if "stop_event" not in st.session_state:
     st.session_state.stop_event = threading.Event()
 if "prefill_input" not in st.session_state:
     st.session_state.prefill_input = ""
+if "fb_input_key" not in st.session_state:
+    st.session_state.fb_input_key = 0
 if "agent_running" not in st.session_state:
     st.session_state.agent_running = False
 
@@ -313,10 +312,13 @@ if prompt:
 with st.sidebar:
     # 留言板（每次直接从 Gist 拉取，不缓存）
     with st.expander("💬 留言板", expanded=False):
-        _fb_input = st.text_area("写下你的建议或反馈", key="fb_input", height=80)
+        _fb_input = st.text_area("写下你的建议或反馈", key=f"fb_input_{st.session_state.fb_input_key}", height=80)
         if st.button("提交留言", use_container_width=True, disabled=not _fb_input):
+            import time  # noqa: E402
             gist_add_feedback(_fb_input.strip())
+            time.sleep(0.8)  # 等异步写入 Gist 完成
             st.toast("感谢你的反馈！")
+            st.session_state.fb_input_key += 1  # key 变化，强制 text_area 重建
             st.rerun()
         _fb_data = gist_load()
         _feedbacks = (_fb_data or {}).get("feedback", [])
