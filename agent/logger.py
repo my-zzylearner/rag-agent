@@ -2,34 +2,15 @@
 统一日志模块。
 
 环境变量：
-  DEBUG=true   输出详细调试日志（tool 参数、模型响应、报错堆栈）
-  DEBUG=false  只输出 WARNING 及以上（默认）
+  DEBUG=true   输出详细调试日志（tool 参数、模型切换、报错堆栈）
+  DEBUG=false  只输出 ERROR（默认）
 
 日志格式：JSON 单行，方便 Streamlit Cloud Logs 面板过滤。
 """
 import os
 import json
-import logging
 import traceback
 from datetime import datetime, timezone
-
-
-def _setup() -> logging.Logger:
-    # ERROR 始终开启；DEBUG=true 时输出所有级别
-    level = logging.DEBUG if os.getenv("DEBUG", "").lower() == "true" else logging.ERROR
-    logger = logging.getLogger("rag_agent")
-    if logger.handlers:
-        return logger
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(level)
-    logger.propagate = False
-    return logger
-
-
-_logger = _setup()
 
 
 def _emit(level: str, trace_id: str, event: str, **kwargs):
@@ -41,12 +22,13 @@ def _emit(level: str, trace_id: str, event: str, **kwargs):
         **kwargs,
     }
     line = json.dumps(record, ensure_ascii=False)
-    if level == "DEBUG":
-        _logger.debug(line)
-    elif level == "WARNING":
-        _logger.warning(line)
-    elif level == "ERROR":
-        _logger.error(line)
+    is_debug = os.getenv("DEBUG", "").lower() == "true"
+    if level == "ERROR":
+        print(line, flush=True)
+    elif level == "WARNING" and is_debug:
+        print(line, flush=True)
+    elif level == "DEBUG" and is_debug:
+        print(line, flush=True)
 
 
 def debug(trace_id: str, event: str, **kwargs):

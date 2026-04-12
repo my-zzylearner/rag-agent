@@ -133,20 +133,6 @@ try:
 except Exception:
     st.sidebar.caption("知识库：统计加载中...")
 
-# 知识内化状态反馈
-import json as _json  # noqa: E402
-_status_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".internalize_status.json")
-if os.path.exists(_status_file):
-    try:
-        with open(_status_file, "r", encoding="utf-8") as _f:
-            _entries = _json.load(_f)
-        if _entries:
-            st.sidebar.caption("最近内化：")
-            for _e in _entries:
-                st.sidebar.caption(f"  {_e['time']} · {_e['query'][:30]} → {_e['file']}")
-    except Exception:
-        pass
-
 RELEVANCE_THRESHOLD = 0.3  # 低于此相关度的检索结果不展示
 
 
@@ -324,6 +310,21 @@ with st.sidebar:
             ):
                 st.session_state.prefill_input = q
                 st.rerun()
+
+    # 最近内化状态
+    import json as _json  # noqa: E402
+    _status_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".internalize_status.json")
+    if os.path.exists(_status_file):
+        try:
+            with open(_status_file, "r", encoding="utf-8") as _f:
+                _entries = _json.load(_f)
+            if _entries:
+                st.divider()
+                st.caption("最近内化：")
+                for _e in _entries:
+                    st.caption(f"  {_e['time']} · {_e['query'][:30]} → {_e['file']}")
+        except Exception:
+            pass
 
     st.divider()
     if st.button("🗑️ 清空对话", use_container_width=True):
