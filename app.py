@@ -19,7 +19,7 @@ if os.path.exists(_env_file):
             _line = _line.strip().lstrip("#;").strip()
             if "=" in _line:
                 os.environ.pop(_line.split("=", 1)[0].strip(), None)
-load_dotenv()
+load_dotenv(_env_file)
 
 from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
