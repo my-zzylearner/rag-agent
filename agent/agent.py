@@ -6,7 +6,6 @@ import os
 import json
 import threading
 import uuid
-import functools
 from typing import Generator, Dict, Any, Optional
 from openai import OpenAI
 
@@ -49,7 +48,6 @@ PROVIDERS = {
 }
 
 
-@functools.lru_cache(maxsize=1)
 def _build_candidates() -> list:
     """
     解析 LLM / LLM_FALLBACK 环境变量，返回有序候选列表。
@@ -57,7 +55,7 @@ def _build_candidates() -> list:
     LLM=bailian/qwen-plus
     LLM_FALLBACK=bailian/qwen-turbo,qianfan/ernie-speed-pro-128k
     """
-    entries = [os.getenv("LLM", "qianfan")]
+    entries = [os.getenv("LLM", "bailian")]
     fallback = os.getenv("LLM_FALLBACK", "")
     if fallback:
         entries += [s.strip() for s in fallback.split(",") if s.strip()]
