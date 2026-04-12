@@ -10,12 +10,14 @@
 import os
 import json
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+_CST = timezone(timedelta(hours=8))
 
 
 def _emit(level: str, trace_id: str, event: str, **kwargs):
     record = {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "ts": datetime.now(_CST).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+08:00",
         "level": level,
         "trace_id": trace_id,
         "event": event,

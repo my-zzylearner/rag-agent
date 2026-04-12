@@ -273,6 +273,24 @@ def run_agent(
                 retry_event = _next_candidate(e)
                 if retry_event:
                     yield retry_event
-                    continue  # 重跑本轮
-                yield {"type": "error", "content": f"调用 LLM API 失败: {str(e)}", "trace_id": trace_id}
+                    try:
+                        stream = client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            stream=True,
+                            timeout=60,
+                        )
+                        for chunk in stream:
+                            if stop_event and stop_event.is_set():
+                                yield {"type": "stopped"}
+                                return
+                            delta = chunk.choices[0].delta.content
+                            if delta:
+                                yield {"type": "answer_chunk", "content": delta}
+                        yield {"type": "answer", "content": ""}
+                    except Exception as e2:
+                        log_error(trace_id, "stream_final_retry_failed", exc=e2, round=round_num, model=label, query=user_query)
+                        yield {"type": "error", "content": f"调用 LLM API 失败: {str(e2)}", "trace_id": trace_id}
+                else:
+                    yield {"type": "error", "content": f"调用 LLM API 失败: {str(e)}", "trace_id": trace_id}
             return
