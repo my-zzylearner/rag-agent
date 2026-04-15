@@ -13,6 +13,7 @@ from .tools import TOOLS, execute_tool
 from .logger import debug, warning, error as log_error
 
 MAX_TOOL_ROUNDS = 3  # 最多调用工具轮次，防止死循环
+STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "120"))  # 流式输出超时秒数，默认 120s
 
 SYSTEM_PROMPT = """你是一个专业的 AI 搜索助手，可以回答各类问题。
 
@@ -91,6 +92,8 @@ def _should_fallback(exc: Exception) -> bool:
         # 模型不存在 / 无权限
         "model_not_found", "model not found", "does not exist", "invalid_request_error",
         "no permission", "not have access", "404",
+        # 超时
+        "timeout", "timed out", "read timeout", "connect timeout",
     )
     return any(k in msg for k in fallback_keywords)
 
@@ -217,7 +220,7 @@ def run_agent(
                     model=model,
                     messages=messages,
                     stream=True,
-                    timeout=60,
+                    timeout=STREAM_TIMEOUT,
                 )
                 chunk_count = 0
                 for chunk in stream:
@@ -288,7 +291,7 @@ def run_agent(
                     model=model,
                     messages=messages,
                     stream=True,
-                    timeout=60,
+                    timeout=STREAM_TIMEOUT,
                 )
                 chunk_count = 0
                 for chunk in stream:
@@ -313,7 +316,7 @@ def run_agent(
                             model=model,
                             messages=messages,
                             stream=True,
-                            timeout=60,
+                            timeout=STREAM_TIMEOUT,
                         )
                         for chunk in stream:
                             if stop_event and stop_event.is_set():
