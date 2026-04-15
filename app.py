@@ -21,7 +21,7 @@ if os.path.exists(_env_file):
                 os.environ.pop(_line.split("=", 1)[0].strip(), None)
 load_dotenv(_env_file)
 
-from rag.indexer import index_documents, is_indexed, get_collection  # noqa: E402
+from rag.indexer import index_documents, is_indexed, _count, _get_all, _delete_by_filter  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
 from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
 
@@ -97,11 +97,17 @@ if "startup_done" not in st.session_state:
             st.write(f"✅ 知识库索引完成，写入 {chunk_count} 个文本块")
         else:
             st.write("✅ 知识库已就绪")
+        st.write("⏳ 正在预热检索索引...")
+        from rag.retriever import warm_up_bm25
+        warm_up_bm25()
+        st.write("✅ 检索索引已就绪")
         _startup_status.update(label="启动完成", state="complete", expanded=False)
     st.session_state.startup_done = True
 else:
     _warm_up_embedder()
     chunk_count = init_index()
+    from rag.retriever import warm_up_bm25
+    warm_up_bm25()
 
 # ── 状态初始化 ────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -145,9 +151,9 @@ else:
 
 @st.cache_data(ttl=60)
 def _get_kb_stats():
-    col = get_collection()
-    total = col.count()
-    web = len(col.get(where={"type": {"$eq": "web_cache"}}, include=[])["ids"])
+    total = _count()
+    all_data = _get_all()
+    web = sum(1 for m in all_data["metadatas"] if (m or {}).get("type") == "web_cache")
     return total, web
 
 try:
@@ -235,11 +241,14 @@ if prompt:
                     st.session_state.stop_event.set()
             stream_ph = [None]  # 用列表包装，避免闭包赋值问题
 
+            # 传入历史消息（不含当前 prompt，run_agent 内部会追加）
+            _history = st.session_state.messages[:-1]
             for event in run_agent(
                 prompt,
                 stop_event=st.session_state.stop_event,
                 max_tool_rounds=cfg_max_rounds,
                 top_k=cfg_top_k,
+                history=_history,
             ):
                 if event["type"] == "tool_call":
                     tool_label = {
@@ -378,9 +387,8 @@ with st.sidebar:
 
     if st.button("🔄 重建知识库", use_container_width=True):
         try:
-            col = get_collection()
-            if col.count() > 0:
-                col.delete(where={"source": {"$ne": ""}})
+            if _count() > 0:
+                _delete_by_filter("source", "", op="ne")
         except Exception:
             pass
         st.cache_resource.clear()

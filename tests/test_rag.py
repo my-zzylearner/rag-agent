@@ -9,25 +9,17 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
-from rag.indexer import add_chunks, chunk_text, get_collection, CHUNK_SIZE, CHUNK_OVERLAP
+from rag.indexer import add_chunks, chunk_text, get_collection, MAX_CHUNK_SIZE
 from rag.retriever import retrieve
 
 
 def test_chunk_text_basic():
     """正常文本能被切成多个 chunk"""
-    text = "A" * (CHUNK_SIZE * 3)
+    # 用多个段落（\n\n 分隔），每段接近 MAX_CHUNK_SIZE，确保触发切分
+    para = "A" * (MAX_CHUNK_SIZE - 10)
+    text = f"{para}\n\n{para}\n\n{para}"
     chunks = chunk_text(text, "test.md")
     assert len(chunks) > 1
-
-
-def test_chunk_overlap():
-    """相邻 chunk 之间有重叠内容"""
-    text = "X" * CHUNK_SIZE + "Y" * CHUNK_SIZE
-    chunks = chunk_text(text, "test.md")
-    assert len(chunks) >= 2
-    # 第一个 chunk 末尾和第二个 chunk 开头应有重叠
-    overlap = chunks[0]["text"][-CHUNK_OVERLAP:]
-    assert chunks[1]["text"].startswith(overlap)
 
 
 def test_chunk_source_preserved():

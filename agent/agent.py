@@ -94,11 +94,15 @@ def _should_fallback(exc: Exception) -> bool:
     return any(k in msg for k in fallback_keywords)
 
 
+HISTORY_WINDOW = 6  # 保留最近 N 轮对话（每轮 = 1 user + 1 assistant，共 2N 条消息）
+
+
 def run_agent(
     user_query: str,
     stop_event: Optional[threading.Event] = None,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     top_k: int = 4,
+    history: Optional[list] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Agent 主循环，使用 generator 流式返回事件：
@@ -121,10 +125,25 @@ def run_agent(
 
     from datetime import datetime
     today = datetime.now().strftime("%Y年%m月%d日")
+
+    # 拼入历史对话（固定窗口，只保留最近 HISTORY_WINDOW 轮）
+    # history 格式：[{"role": "user"|"assistant", "content": str}, ...]
+    history_messages = []
+    if history:
+        # 只取 role 为 user/assistant 的消息，过滤掉 sources/steps 等额外字段
+        valid = [{"role": m["role"], "content": m["content"]}
+                 for m in history if m.get("role") in ("user", "assistant") and m.get("content")]
+        # 取最近 HISTORY_WINDOW 轮（每轮 2 条），排除最后一条（当前 user query 还没加）
+        history_messages = valid[-(HISTORY_WINDOW * 2):]
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT + f"\n\n当前日期：{today}"},
+        *history_messages,
         {"role": "user", "content": user_query},
     ]
+
+    debug(trace_id, "messages_built", history_len=len(history_messages),
+          roles=[m["role"] for m in messages])
 
     # 选出当前使用的模型，遇到额度错误时切换到下一个
     candidate_idx = 0
@@ -183,10 +202,14 @@ def run_agent(
 
         msg = resp.choices[0].message
         tool_calls = msg.tool_calls
+        debug(trace_id, "llm_decision", round=round_num, has_tool_calls=bool(tool_calls),
+              tool_names=[tc.function.name for tc in tool_calls] if tool_calls else [],
+              finish_reason=resp.choices[0].finish_reason)
 
         # ── 第二步：无 tool calls，直接流式输出答案 ────────────────
         if not tool_calls:
-            debug(trace_id, "stream_answer", round=round_num, model=label)
+            debug(trace_id, "stream_answer_start", round=round_num, model=label,
+                  messages_count=len(messages))
             try:
                 stream = client.chat.completions.create(
                     model=model,
@@ -194,6 +217,7 @@ def run_agent(
                     stream=True,
                     timeout=60,
                 )
+                chunk_count = 0
                 for chunk in stream:
                     if stop_event and stop_event.is_set():
                         debug(trace_id, "agent_stopped", round=round_num)
@@ -201,8 +225,10 @@ def run_agent(
                         return
                     delta = chunk.choices[0].delta.content
                     if delta:
+                        chunk_count += 1
                         yield {"type": "answer_chunk", "content": delta}
-                debug(trace_id, "agent_done", round=round_num, model=label)
+                debug(trace_id, "stream_answer_done", round=round_num, model=label,
+                      chunk_count=chunk_count)
                 yield {"type": "answer", "content": ""}
             except Exception as e:
                 log_error(trace_id, "stream_failed", exc=e, round=round_num, model=label, query=user_query)
@@ -235,7 +261,10 @@ def run_agent(
             tool_result = json.loads(tool_result_str)
 
             result_count = len(tool_result.get("results", []))
-            debug(trace_id, "tool_result", round=round_num, tool=tool_name, result_count=result_count)
+            has_message = "message" in tool_result  # 空结果时有 message 字段
+            debug(trace_id, "tool_result", round=round_num, tool=tool_name,
+                  result_count=result_count, empty=has_message,
+                  message=tool_result.get("message", ""))
             yield {
                 "type": "tool_result",
                 "tool": tool_name,
@@ -250,7 +279,8 @@ def run_agent(
 
         # ── 第四步：达到最大轮次，强制输出最终答案 ────────────────
         if round_num >= max_tool_rounds:
-            debug(trace_id, "stream_final", round=round_num, model=label)
+            debug(trace_id, "stream_final_start", round=round_num, model=label,
+                  messages_count=len(messages))
             try:
                 stream = client.chat.completions.create(
                     model=model,
@@ -258,6 +288,7 @@ def run_agent(
                     stream=True,
                     timeout=60,
                 )
+                chunk_count = 0
                 for chunk in stream:
                     if stop_event and stop_event.is_set():
                         debug(trace_id, "agent_stopped", round=round_num)
@@ -265,8 +296,10 @@ def run_agent(
                         return
                     delta = chunk.choices[0].delta.content
                     if delta:
+                        chunk_count += 1
                         yield {"type": "answer_chunk", "content": delta}
-                debug(trace_id, "agent_done", round=round_num, model=label)
+                debug(trace_id, "stream_final_done", round=round_num, model=label,
+                      chunk_count=chunk_count)
                 yield {"type": "answer", "content": ""}
             except Exception as e:
                 log_error(trace_id, "stream_final_failed", exc=e, round=round_num, model=label, query=user_query)

@@ -12,6 +12,7 @@
 import logging
 import os
 import sys
+from datetime import datetime, timezone, timedelta
 from logging.handlers import RotatingFileHandler
 
 # 项目根目录（本文件位于 utils/，上一级即为项目根）
@@ -19,7 +20,17 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGS_DIR = os.path.join(_PROJECT_ROOT, "logs")
 _LOG_FILE = os.path.join(_LOGS_DIR, "app.log")
 
-_FORMATTER = logging.Formatter(
+_CST = timezone(timedelta(hours=8))
+
+
+class _CSTFormatter(logging.Formatter):
+    """输出北京时间（UTC+8）的日志格式化器。"""
+    def formatTime(self, record, datefmt=None):
+        ct = datetime.fromtimestamp(record.created, tz=_CST)
+        return ct.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+
+_FORMATTER = _CSTFormatter(
     fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )

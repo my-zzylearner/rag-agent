@@ -187,9 +187,17 @@ def _internalize(query: str, results: list, client, model: str) -> None:
     # Step 5 — 重新索引
     index_single_document(filepath)
 
+    # Step 6 — 写入 Gist 审计记录（异步，不阻塞）
+    filename = os.path.basename(filepath)
+    try:
+        from utils.gist_store import add_internalized
+        add_internalized(query, filename, refined)
+    except Exception:
+        pass
+
     # 写入状态文件，供侧边栏展示
-    _write_status(query, os.path.basename(filepath))
-    _logger.info("knowledge internalization succeeded: query=%r file=%s", query, os.path.basename(filepath))
+    _write_status(query, filename)
+    _logger.info("knowledge internalization succeeded: query=%r file=%s", query, filename)
 
 
 # ──────────────────────────────────────────────

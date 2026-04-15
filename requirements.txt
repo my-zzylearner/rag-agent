@@ -6,3 +6,5 @@ chromadb==0.5.23
 protobuf>=3.20.0,<4.0.0
 python-dotenv>=1.0.0
 pypdf>=4.0.0
+rank_bm25>=0.2.2
+qdrant-client>=1.9.0

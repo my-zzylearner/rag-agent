@@ -12,3 +12,13 @@ repos:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
         exclude: .env.example
+
+  - repo: local
+    hooks:
+      - id: acceptance-tests
+        name: acceptance baseline tests
+        entry: venv/bin/pytest tests/test_acceptance.py -q
+        language: system
+        pass_filenames: false
+        always_run: false
+        files: ^(agent/agent\.py|agent/tools\.py)$

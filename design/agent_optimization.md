@@ -116,17 +116,18 @@ metadata: {"source": url, "type": "web_cache"}
 
 | # | 功能 | 优先级 | 状态 | 说明 |
 |---|------|--------|------|------|
-| 1 | 内化质量过滤 | 🔴 高 | ⏳ 待实现 | 提炼结果 < 80 字或含拒绝语时跳过；web_cache 条目 < 50 字时过滤 |
+| 1 | 内化质量过滤 | 🔴 高 | ✅ 已完成 | 拒绝语检测；重复度检测；可选 LLM 打分（长度不作为质量指标） |
 | 2 | web_cache 老化清理 | 🔴 高 | ✅ 已完成 | TTL=7天，add_chunks 时删除过期条目；数量上限 200 保留 |
 | 3 | 内化匿名化 | 🔴 高 | ✅ 已完成 | 侧边栏只展示时间和文件名，不暴露用户原始 query |
 | 4 | 知识库评估（RAGAS） | 🟡 中 | ✅ 已完成 | eval/evaluate.py 离线评估，自动生成问题，输出 eval/report.md |
-| 5 | 混合检索 | 🟡 中 | ⏳ 待实现 | BM25 + 向量检索 + RRF 融合，提升稀疏关键词（缩写、专有名词）召回率 |
-| 6 | ChromaDB 持久化 | 🟡 中 | ⏳ 待实现 | Streamlit Cloud 冷启动重建知识库，考虑 Qdrant Cloud 或 Pinecone |
+| 5 | 混合检索 | 🟡 中 | ✅ 已完成 | BM25 + 向量 + RRF 融合（rag/retriever.py），rank_bm25 库，fetch_k=top_k*2 候选 |
+| 6 | ChromaDB 持久化（方案B） | 🟡 中 | ✅ 已完成 | 配置 QDRANT_URL+QDRANT_API_KEY 自动切换 Qdrant Cloud，未配置降级本地 ChromaDB；indexer 抽象统一接口 |
+| 15 | 连续追问（多轮对话记忆） | 🟡 中 | ✅ 已完成 | run_agent 新增 history 参数，固定窗口 6 轮（12条），app.py 传入 session_state.messages |
 | 7 | Reranking | 🟢 低 | ⏳ 待实现 | Cross-Encoder 重排召回结果，适合知识库规模较大后再加 |
 | 8 | 用户隔离 | 🟢 低 | ⏳ 待实现 | 内化内容目前全局共享，考虑按 session 隔离或管理员审核机制 |
 | 9 | UI 美化 | 🟢 低 | ⏳ 待实现 | 页面视觉优化：配色、字体、间距、卡片样式；设计专属图标 |
 | 10 | 工具结构化错误 | 🔴 高 | ⏳ 待实现 | search_knowledge_base 空结果时给出修正建议（如"建议调用 search_web 继续检索"），减少 Agent 直接回答"未找到"的情况 |
-| 11 | 确定性验收基线 | 🔴 高 | ⏳ 待实现 | 为核心场景（天气/RAG原理/协同过滤等）建立代码评分器测试用例，改 prompt 或换模型后能自动检测退化 |
+| 11 | 确定性验收基线 | 🔴 高 | ✅ 已完成 | tests/test_acceptance.py，6 个场景：天气路由、RAG路由、KB降级、停止信号，全 mock 离线运行 |
 | 12 | 上下文分层管理 | 🟡 中 | ⏳ 待实现 | system prompt 拆分为常驻层（身份/约束）+ 按需加载层（路由规则/领域知识），防止 Context Rot |
 | 13 | 多轮对话记忆压缩 | 🟡 中 | ⏳ 待实现 | messages[] 超 token 阈值时自动摘要压缩，防止长对话后决策质量下降 |
 | 14 | 评测环境隔离 | 🟡 中 | ⏳ 待实现 | eval/evaluate.py 使用独立 ChromaDB 实例，不复用生产知识库，保证评测结果稳定可重现 |
@@ -234,3 +235,6 @@ yield {"type": "answer", "content": final_resp.choices[0].message.content}
 - 2026-04-12: _build_candidates() 加 lru_cache 进程级缓存，避免每次请求重建 OpenAI client
 - 2026-04-12: 新增 eval/evaluate.py 离线评估脚本，自动从文档生成问答对，RAGAS 评估 Faithfulness/Answer Relevancy/Context Recall，输出 eval/report.md
 - 2026-04-12: 首次评估结果：Faithfulness=0.948（良好），Context Recall=0.250（偏低），Answer Relevancy=nan（embedding调用失败待修复）；Context Recall 低的根本原因是向量检索召回率不足，混合检索（BM25+向量）可改善
+- 2026-04-14: 内化质量过滤补充长度检查后撤回（长度不是质量指标，会激励口水话）；新增 tests/test_acceptance.py 验收基线（6 场景，全 mock 离线）
+- 2026-04-15: 混合检索（BM25+向量+RRF）上线；连续追问支持（history 固定窗口 6 轮）；方案E确认：data/docs/ 已在 git，内化文档持久
+- 2026-04-15: Qdrant Cloud 接入（方案B）；indexer 抽象 _count/_get_all/_upsert/_delete_by_ids/_delete_by_filter/_query 六个统一接口，上层无感知后端切换；_use_qdrant() 带连通性探测（5s超时），失败自动降级 ChromaDB；app.py 移除直接依赖 get_collection()
