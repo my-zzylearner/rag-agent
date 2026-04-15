@@ -156,6 +156,12 @@ def _get_kb_stats():
     web = sum(1 for m in all_data["metadatas"] if (m or {}).get("type") == "web_cache")
     return total, web
 
+
+@st.cache_data(ttl=30)
+def _get_internalized():
+    from utils.gist_store import _load_file as _gist_load_file, _FILENAME_INTERNALIZED
+    return (_gist_load_file(_FILENAME_INTERNALIZED) or {}).get("internalized", [])
+
 try:
     _total, _web = _get_kb_stats()
     _local = _total - _web
@@ -368,11 +374,6 @@ with st.sidebar:
                 st.rerun()
 
     # 最近内化状态（从 Gist 读取，Cloud 重启后不丢失，60s 缓存避免频繁请求）
-    @st.cache_data(ttl=60)
-    def _get_internalized():
-        from utils.gist_store import _load_file as _gist_load_file, _FILENAME_INTERNALIZED
-        return (_gist_load_file(_FILENAME_INTERNALIZED) or {}).get("internalized", [])
-
     _internalized_entries = _get_internalized()
     if _internalized_entries:
         st.divider()

@@ -23,7 +23,7 @@ def _emit(level: str, trace_id: str, event: str, **kwargs):
         "event": event,
         **kwargs,
     }
-    line = json.dumps(record, ensure_ascii=False)
+    line = json.dumps(record, ensure_ascii=False, default=str)
     is_debug = os.getenv("DEBUG", "").lower() == "true"
     if level == "ERROR":
         print(line, flush=True)
