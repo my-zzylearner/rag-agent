@@ -118,6 +118,7 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
         if llm_client and results:
             import threading
             from rag.knowledge_internalizer import internalize_async
+            _logger.info("internalize_thread_start: query=%r result_count=%d", query, len(results))
             t = threading.Thread(
                 target=internalize_async,
                 args=(query, results, llm_client, llm_model),

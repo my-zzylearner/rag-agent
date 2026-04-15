@@ -77,8 +77,8 @@ def _get_qdrant_client():
 
 
 def _ensure_qdrant_collection():
-    """确保 Qdrant collection 存在，不存在时创建。"""
-    from qdrant_client.models import Distance, VectorParams
+    """确保 Qdrant collection 存在，不存在时创建；确保 payload index 存在。"""
+    from qdrant_client.models import Distance, VectorParams, PayloadSchemaType
     client = _get_qdrant_client()
     existing = [c.name for c in client.get_collections().collections]
     if COLLECTION_NAME not in existing:
@@ -87,6 +87,20 @@ def _ensure_qdrant_collection():
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
         _logger.info("qdrant: created collection %s", COLLECTION_NAME)
+
+    # 确保 source 字段有 keyword index，_delete_by_filter 过滤时需要
+    try:
+        collection_info = client.get_collection(COLLECTION_NAME)
+        indexed_fields = set(collection_info.payload_schema.keys()) if collection_info.payload_schema else set()
+        if "source" not in indexed_fields:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="source",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            _logger.info("qdrant: created payload index for 'source'")
+    except Exception as e:
+        _logger.warning("qdrant: failed to create payload index: %s", e)
 
 
 @functools.lru_cache(maxsize=1)
