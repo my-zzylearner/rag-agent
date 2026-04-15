@@ -367,20 +367,18 @@ with st.sidebar:
                 st.session_state.prefill_input = q
                 st.rerun()
 
-    # 最近内化状态
-    import json as _json  # noqa: E402
-    _status_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".internalize_status.json")
-    if os.path.exists(_status_file):
-        try:
-            with open(_status_file, "r", encoding="utf-8") as _f:
-                _entries = _json.load(_f)
-            if _entries:
-                st.divider()
-                st.caption("最近内化：")
-                for _e in _entries:
-                    st.caption(f"  {_e['time']} · 📄 {_e['file']}")
-        except Exception:
-            pass
+    # 最近内化状态（从 Gist 读取，Cloud 重启后不丢失，60s 缓存避免频繁请求）
+    @st.cache_data(ttl=60)
+    def _get_internalized():
+        from utils.gist_store import _load_file as _gist_load_file, _FILENAME_INTERNALIZED
+        return (_gist_load_file(_FILENAME_INTERNALIZED) or {}).get("internalized", [])
+
+    _internalized_entries = _get_internalized()
+    if _internalized_entries:
+        st.divider()
+        st.caption("最近内化：")
+        for _e in reversed(_internalized_entries[-5:]):
+            st.caption(f"  {_e['time']} · 📄 {_e['file']}")
 
     st.divider()
     if st.button("🗑️ 清空对话", use_container_width=True):
