@@ -111,14 +111,20 @@ def get_collection():
 
 def _count() -> int:
     if _use_qdrant():
-        client = _get_qdrant_client()
-        return client.count(collection_name=COLLECTION_NAME).count
+        try:
+            _ensure_qdrant_collection()
+            client = _get_qdrant_client()
+            return client.count(collection_name=COLLECTION_NAME).count
+        except Exception as e:
+            _logger.error("qdrant _count failed: %s", e)
+            return 0
     return get_collection().count()
 
 
 def _get_all() -> Dict:
     """返回 {ids, documents, metadatas}，统一格式。"""
     if _use_qdrant():
+        _ensure_qdrant_collection()
         client = _get_qdrant_client()
         records, _ = client.scroll(
             collection_name=COLLECTION_NAME,
@@ -138,6 +144,7 @@ def _get_all() -> Dict:
 
 def _upsert(ids: List[str], embeddings: List[List[float]], documents: List[str], metadatas: List[Dict]):
     if _use_qdrant():
+        _ensure_qdrant_collection()
         from qdrant_client.models import PointStruct
         client = _get_qdrant_client()
         # Qdrant id 必须是 uint64 或 UUID，用 md5 转 int
