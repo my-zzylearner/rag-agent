@@ -61,9 +61,14 @@ TOOLS = [
 
 def search_knowledge_base(query: str, top_k: int = 4) -> Dict:
     """调用 RAG 检索，返回结构化结果"""
-    chunks = retrieve(query, top_k=top_k)
+    try:
+        chunks = retrieve(query, top_k=top_k)
+    except Exception as e:
+        _logger.error("search_knowledge_base failed: query=%r error=%s", query, e)
+        return {"results": [], "message": "知识库检索异常，建议调用 search_web 继续搜索"}
+
     if not chunks:
-        return {"results": [], "message": "知识库中未找到相关内容"}
+        return {"results": [], "message": "知识库中未找到相关内容，建议调用 search_web 继续搜索"}
 
     return {
         "results": [
@@ -127,12 +132,16 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
 
 
 def execute_tool(tool_name: str, tool_args: dict, top_k: int = 4, llm_client=None, llm_model: str = "") -> str:
-    """根据工具名执行对应函数，返回 JSON 字符串"""
-    if tool_name == "search_knowledge_base":
-        result = search_knowledge_base(tool_args.get("query", ""), top_k=top_k)
-    elif tool_name == "search_web":
-        result = search_web(tool_args.get("query", ""), llm_client=llm_client, llm_model=llm_model)
-    else:
-        result = {"error": f"未知工具: {tool_name}"}
+    """根据工具名执行对应函数，返回 JSON 字符串。任何异常都兜住，不让 agent loop 崩溃。"""
+    try:
+        if tool_name == "search_knowledge_base":
+            result = search_knowledge_base(tool_args.get("query", ""), top_k=top_k)
+        elif tool_name == "search_web":
+            result = search_web(tool_args.get("query", ""), llm_client=llm_client, llm_model=llm_model)
+        else:
+            result = {"error": f"未知工具: {tool_name}"}
+    except Exception as e:
+        _logger.error("execute_tool unexpected error: tool=%s error=%s", tool_name, e)
+        result = {"results": [], "message": f"工具执行异常: {str(e)}，建议换用其他工具继续"}
 
     return json.dumps(result, ensure_ascii=False)

@@ -199,14 +199,14 @@ def _query(query_embedding: List[float], n_results: int) -> Dict:
     """向量检索，返回 {ids, documents, metadatas, distances}。"""
     if _use_qdrant():
         client = _get_qdrant_client()
-        hits = client.search(
+        result = client.query_points(
             collection_name=COLLECTION_NAME,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=n_results,
             with_payload=True,
         )
         ids, documents, metadatas, distances = [], [], [], []
-        for h in hits:
+        for h in result.points:
             ids.append(str(h.id))
             documents.append(h.payload.get("document", ""))
             metadatas.append({k: v for k, v in h.payload.items() if k != "document"})
