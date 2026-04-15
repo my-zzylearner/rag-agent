@@ -123,8 +123,9 @@ def run_agent(
         yield {"type": "error", "content": str(e), "trace_id": trace_id}
         return
 
-    from datetime import datetime
-    today = datetime.now().strftime("%Y年%m月%d日")
+    from datetime import datetime, timezone, timedelta
+    _CST = timezone(timedelta(hours=8))
+    today = datetime.now(_CST).strftime("%Y年%m月%d日")
 
     # 拼入历史对话（固定窗口，只保留最近 HISTORY_WINDOW 轮）
     # history 格式：[{"role": "user"|"assistant", "content": str}, ...]
