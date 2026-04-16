@@ -12,7 +12,7 @@ from openai import OpenAI
 from .tools import TOOLS, execute_tool
 from .logger import debug, warning, error as log_error
 
-MAX_TOOL_ROUNDS = 3  # 最多调用工具轮次，防止死循环
+MAX_TOOL_ROUNDS = 4  # 最多调用工具轮次，防止死循环
 STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "120"))  # 流式输出超时秒数，默认 120s
 
 

@@ -132,7 +132,7 @@ st.session_state.stop_event.clear()
 
 # ── 参数配置 + 知识库统计（侧边栏读取，需在 run_agent 调用前定义）──
 if "cfg_max_rounds" not in st.session_state:
-    st.session_state.cfg_max_rounds = 3
+    st.session_state.cfg_max_rounds = 4
 if "cfg_top_k" not in st.session_state:
     st.session_state.cfg_top_k = 4
 
