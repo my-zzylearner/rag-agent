@@ -48,28 +48,6 @@ def _build_client(entry: str):
 _FALLBACK_ERRORS = ("quota", "allocationquota", "403", "429", "rate limit",
                     "insufficient", "free tier", "billing", "balance")
 
-# 内化状态文件路径，供 app.py 侧边栏读取
-STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", ".internalize_status.json")
-MAX_STATUS_ENTRIES = 5  # 最多保留最近 5 条
-
-
-def _write_status(query: str, filename: str) -> None:
-    """将内化结果写入状态文件，供前端展示。"""
-    try:
-        entries = []
-        if os.path.exists(STATUS_FILE):
-            with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                entries = json.load(f)
-        entries.insert(0, {
-            "query": query[:50],
-            "file": filename,
-            "time": datetime.now().strftime("%H:%M"),
-        })
-        entries = entries[:MAX_STATUS_ENTRIES]
-        with open(STATUS_FILE, "w", encoding="utf-8") as f:
-            json.dump(entries, f, ensure_ascii=False)
-    except Exception:
-        pass
 
 # ──────────────────────────────────────────────
 # 常量
@@ -195,8 +173,6 @@ def _internalize(query: str, results: list, client, model: str) -> None:
     except Exception:
         pass
 
-    # 写入状态文件，供侧边栏展示
-    _write_status(query, filename)
     _logger.info("knowledge internalization succeeded: query=%r file=%s", query, filename)
 
 
