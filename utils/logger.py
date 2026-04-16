@@ -51,26 +51,29 @@ def _init_root_handlers() -> None:
 
     root = logging.getLogger()
     # 避免重复添加（多次 import 或 reload 时）
-    if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+    if any(isinstance(h, (RotatingFileHandler, logging.StreamHandler)) for h in root.handlers):
         return
 
     root.setLevel(root_level)
 
-    # ── 文件 handler：DEBUG 及以上全记，按大小轮转 ──────────
-    os.makedirs(_LOGS_DIR, exist_ok=True)
-    file_handler = RotatingFileHandler(
-        _LOG_FILE,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=7,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(_FORMATTER)
-    root.addHandler(file_handler)
+    # ── 文件 handler：仅本地（非 Streamlit Cloud）────────────
+    # Streamlit Cloud 文件系统临时，日志写入无意义，跳过
+    is_cloud = os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("HOME", "").startswith("/home/adminuser")
+    if not is_cloud:
+        os.makedirs(_LOGS_DIR, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            _LOG_FILE,
+            maxBytes=5 * 1024 * 1024,
+            backupCount=7,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(_FORMATTER)
+        root.addHandler(file_handler)
 
-    # ── stderr handler：WARNING 及以上 ────────────────────────
+    # ── stderr handler：DEBUG=true 时输出 INFO+，否则 WARNING+ ──
     stderr_handler = logging.StreamHandler(sys.stderr)
-    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setLevel(logging.INFO if debug_mode else logging.WARNING)
     stderr_handler.setFormatter(_FORMATTER)
     root.addHandler(stderr_handler)
 

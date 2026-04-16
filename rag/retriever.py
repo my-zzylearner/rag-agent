@@ -110,16 +110,47 @@ def retrieve(query: str, top_k: int = TOP_K) -> List[Dict]:
 
     top_ids = sorted(rrf, key=lambda x: rrf[x], reverse=True)[:top_k]
 
-    # ── 组装结果 ─────────────────────────────────────────────
+    # ── 组装结果 + 来源统计 ──────────────────────────────────
     id_to_idx = {doc_id: i for i, doc_id in enumerate(all_ids)}
     chunks = []
+    vec_only = bm25_only = both = 0
     for doc_id in top_ids:
-        idx = id_to_idx[doc_id]
+        idx = id_to_idx.get(doc_id)
+        if idx is None:
+            # 向量库有但 BM25 缓存没有（缓存未及时失效），跳过并触发缓存失效
+            invalidate_bm25()
+            continue
+        # 统计来源
+        in_vec = doc_id in vec_ranks
+        in_bm25 = doc_id in bm25_ranks
+        if in_vec and in_bm25:
+            both += 1
+        elif in_vec:
+            vec_only += 1
+        else:
+            bm25_only += 1
+
         meta = all_metas[idx] or {}
         chunks.append({
             "text": all_texts[idx],
             "source": meta.get("source", "unknown"),
             "score": round(rrf[doc_id], 6),
         })
+
+    # 日志（INFO 级别，DEBUG=true 时在 Streamlit Cloud Logs 可见）
+    _logger.info("retrieve: query=%r top_k=%d vec_only=%d bm25_only=%d both=%d total=%d",
+                 query, top_k, vec_only, bm25_only, both, len(chunks))
+
+    # 异步持久化到 Gist（失败静默）
+    try:
+        import threading as _threading
+        from utils.gist_store import add_retrieval_stat
+        _threading.Thread(
+            target=add_retrieval_stat,
+            args=(query, top_k, vec_only, bm25_only, both),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
 
     return chunks

@@ -10,6 +10,8 @@ Gist 文件：
     初始内容：{"visits": 0, "queries": 0, "feedback": []}
   rag_agent_internalized.json — 知识内化审计记录（独立锁，互不阻塞）
     初始内容：{"internalized": []}
+  rag_agent_retrieval_stats.json — BM25/向量检索来源分布监控（独立锁）
+    初始内容：{"stats": []}
 
 未配置时所有操作静默跳过，不影响主功能。
 """
@@ -25,8 +27,10 @@ _CST = timezone(timedelta(hours=8))
 
 _FILENAME = "rag_agent_stats.json"
 _FILENAME_INTERNALIZED = "rag_agent_internalized.json"
+_FILENAME_RETRIEVAL = "rag_agent_retrieval_stats.json"
 _lock = threading.Lock()
 _lock_internalized = threading.Lock()
+_lock_retrieval = threading.Lock()
 
 
 def _enabled() -> bool:
@@ -127,6 +131,30 @@ def add_internalized(query: str, filename: str, preview: str) -> None:
         threading.Thread(
             target=_save_file_sync,
             args=(_FILENAME_INTERNALIZED, data),
+            daemon=True,
+        ).start()
+
+
+def add_retrieval_stat(query: str, top_k: int, vec_only: int, bm25_only: int, both: int) -> None:
+    """追加一条检索来源统计记录，异步写回，最多保留 200 条。"""
+    if not _enabled():
+        return
+    with _lock_retrieval:
+        data = _load_file(_FILENAME_RETRIEVAL)
+        if data is None:
+            return
+        data.setdefault("stats", []).append({
+            "time": datetime.now(_CST).strftime("%Y-%m-%d %H:%M"),
+            "query": query[:80],
+            "top_k": top_k,
+            "vec_only": vec_only,
+            "bm25_only": bm25_only,
+            "both": both,
+        })
+        data["stats"] = data["stats"][-200:]
+        threading.Thread(
+            target=_save_file_sync,
+            args=(_FILENAME_RETRIEVAL, data),
             daemon=True,
         ).start()
 
