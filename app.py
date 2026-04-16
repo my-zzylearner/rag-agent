@@ -311,6 +311,9 @@ if prompt:
             _render_sources(all_sources, query=prompt)
         elif was_stopped:
             st.markdown("_已停止_")
+        elif not was_stopped:
+            # 没有输出也没有停止，说明模型未返回内容
+            st.info("模型本次未返回内容，请重试。")
 
         st.session_state.messages.append({
             "role": "assistant",

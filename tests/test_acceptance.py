@@ -287,3 +287,48 @@ class TestStopControl:
         # 不应有工具调用或回答
         assert "tool_call" not in event_types
         assert "answer" not in event_types
+
+
+# ── 场景 5：流式空内容降级 ────────────────────────────────
+# 验收标准：流式返回空内容时，降级为非流式补一次，最终有回答输出
+
+class TestStreamEmptyFallback:
+    """流式返回空内容时必须降级非流式，确保有输出。"""
+
+    @patch("agent.agent._build_candidates")
+    def test_stream_empty_falls_back_to_non_stream(self, mock_build_candidates):
+        """流式 chunk 全为空时，降级非流式调用，最终有 answer_chunk 输出。"""
+        from agent.agent import run_agent
+
+        # 第一轮决策：直接回答，不调工具
+        answer_resp = _make_answer_response("")
+        answer_resp.choices[0].finish_reason = "stop"
+
+        # 流式：所有 chunk content 为 None（模拟空返回）
+        empty_chunks = []
+        for _ in range(3):
+            chunk = MagicMock()
+            chunk.choices = [MagicMock(delta=MagicMock(content=None),
+                                       finish_reason=None)]
+            empty_chunks.append(chunk)
+
+        # 非流式降级调用返回真实内容
+        fallback_resp = MagicMock()
+        fallback_resp.choices = [MagicMock(
+            message=MagicMock(content="这是降级后的回答内容")
+        )]
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [
+            answer_resp,        # 第一轮决策（无工具调用）
+            iter(empty_chunks), # 流式：空内容
+            fallback_resp,      # 非流式降级
+        ]
+        mock_build_candidates.return_value = [(mock_client, "qwen-turbo", "bailian")]
+
+        events = _collect_events(run_agent("测试问题", max_tool_rounds=3))
+        answer = _get_answer(events)
+        event_types = [e["type"] for e in events]
+
+        assert "answer" in event_types, f"应有 answer 事件，实际: {event_types}"
+        assert answer == "这是降级后的回答内容", f"降级后应有回答内容，实际: {answer!r}"

@@ -223,17 +223,37 @@ def run_agent(
                     timeout=STREAM_TIMEOUT,
                 )
                 chunk_count = 0
+                first_chunk_logged = False
                 for chunk in stream:
                     if stop_event and stop_event.is_set():
                         debug(trace_id, "agent_stopped", round=round_num)
                         yield {"type": "stopped"}
                         return
+                    # 首个 chunk 记录原始结构，帮助排查空内容问题
+                    if not first_chunk_logged:
+                        first_chunk_logged = True
+                        try:
+                            debug(trace_id, "stream_first_chunk",
+                                  finish_reason=chunk.choices[0].finish_reason,
+                                  has_content=bool(chunk.choices[0].delta.content),
+                                  delta_keys=list(chunk.choices[0].delta.__dict__.keys()))
+                        except Exception:
+                            pass
                     delta = chunk.choices[0].delta.content
                     if delta:
                         chunk_count += 1
                         yield {"type": "answer_chunk", "content": delta}
                 debug(trace_id, "stream_answer_done", round=round_num, model=label,
                       chunk_count=chunk_count)
+                # 流式返回空内容时，降级为非流式补一次
+                if chunk_count == 0:
+                    warning(trace_id, "stream_empty_fallback", round=round_num, model=label)
+                    fallback_resp = client.chat.completions.create(
+                        model=model, messages=messages, timeout=STREAM_TIMEOUT,
+                    )
+                    fallback_content = (fallback_resp.choices[0].message.content or "").strip()
+                    if fallback_content:
+                        yield {"type": "answer_chunk", "content": fallback_content}
                 yield {"type": "answer", "content": ""}
             except Exception as e:
                 log_error(trace_id, "stream_failed", exc=e, round=round_num, model=label, query=user_query)
