@@ -64,7 +64,8 @@ def search_knowledge_base(query: str, top_k: int = 4) -> Dict:
     try:
         chunks = retrieve(query, top_k=top_k)
     except Exception as e:
-        _logger.error("search_knowledge_base failed: query=%r error=%s", query, e)
+        _logger.error("search_knowledge_base failed: query=%r error=%s error_type=%s",
+                      query, e, type(e).__name__, exc_info=True)
         return {"results": [], "message": "知识库检索异常，建议调用 search_web 继续搜索"}
 
     if not chunks:

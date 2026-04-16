@@ -15,6 +15,52 @@ from .logger import debug, warning, error as log_error
 MAX_TOOL_ROUNDS = 3  # 最多调用工具轮次，防止死循环
 STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "120"))  # 流式输出超时秒数，默认 120s
 
+
+def _stream_with_fallback(
+    client, model: str, messages: list,
+    stop_event, timeout: int,
+    trace_id: str, round_num: int, event_label: str,
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    流式输出并处理空内容：
+    - 正常流式逐 chunk yield answer_chunk
+    - chunk_count=0 时降级非流式补一次
+    - 最后 yield {"type": "answer", "content": ""}
+    调用方负责捕获异常。
+    """
+    stream = client.chat.completions.create(
+        model=model, messages=messages, stream=True, timeout=timeout,
+    )
+    chunk_count = 0
+    first_logged = False
+    for chunk in stream:
+        if stop_event and stop_event.is_set():
+            debug(trace_id, "agent_stopped", round=round_num)
+            yield {"type": "stopped"}
+            return
+        if not first_logged:
+            first_logged = True
+            try:
+                debug(trace_id, f"{event_label}_first_chunk",
+                      has_content=bool(chunk.choices[0].delta.content),
+                      delta_keys=list(chunk.choices[0].delta.__dict__.keys()))
+            except Exception:
+                pass
+        delta = chunk.choices[0].delta.content
+        if delta:
+            chunk_count += 1
+            yield {"type": "answer_chunk", "content": delta}
+    debug(trace_id, f"{event_label}_done", round=round_num, model=model, chunk_count=chunk_count)
+    if chunk_count == 0:
+        warning(trace_id, f"{event_label}_empty_fallback", round=round_num, model=model)
+        fallback_resp = client.chat.completions.create(
+            model=model, messages=messages, timeout=timeout,
+        )
+        content = (fallback_resp.choices[0].message.content or "").strip()
+        if content:
+            yield {"type": "answer_chunk", "content": content}
+    yield {"type": "answer", "content": ""}
+
 SYSTEM_PROMPT = """你是一个专业的 AI 搜索助手，可以回答各类问题。
 
 你有两个工具：
@@ -216,45 +262,10 @@ def run_agent(
             debug(trace_id, "stream_answer_start", round=round_num, model=label,
                   messages_count=len(messages))
             try:
-                stream = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    stream=True,
-                    timeout=STREAM_TIMEOUT,
+                yield from _stream_with_fallback(
+                    client, model, messages, stop_event,
+                    STREAM_TIMEOUT, trace_id, round_num, "stream_answer",
                 )
-                chunk_count = 0
-                first_chunk_logged = False
-                for chunk in stream:
-                    if stop_event and stop_event.is_set():
-                        debug(trace_id, "agent_stopped", round=round_num)
-                        yield {"type": "stopped"}
-                        return
-                    # 首个 chunk 记录原始结构，帮助排查空内容问题
-                    if not first_chunk_logged:
-                        first_chunk_logged = True
-                        try:
-                            debug(trace_id, "stream_first_chunk",
-                                  finish_reason=chunk.choices[0].finish_reason,
-                                  has_content=bool(chunk.choices[0].delta.content),
-                                  delta_keys=list(chunk.choices[0].delta.__dict__.keys()))
-                        except Exception:
-                            pass
-                    delta = chunk.choices[0].delta.content
-                    if delta:
-                        chunk_count += 1
-                        yield {"type": "answer_chunk", "content": delta}
-                debug(trace_id, "stream_answer_done", round=round_num, model=label,
-                      chunk_count=chunk_count)
-                # 流式返回空内容时，降级为非流式补一次
-                if chunk_count == 0:
-                    warning(trace_id, "stream_empty_fallback", round=round_num, model=label)
-                    fallback_resp = client.chat.completions.create(
-                        model=model, messages=messages, timeout=STREAM_TIMEOUT,
-                    )
-                    fallback_content = (fallback_resp.choices[0].message.content or "").strip()
-                    if fallback_content:
-                        yield {"type": "answer_chunk", "content": fallback_content}
-                yield {"type": "answer", "content": ""}
             except Exception as e:
                 log_error(trace_id, "stream_failed", exc=e, round=round_num, model=label, query=user_query)
                 retry_event = _next_candidate(e)
@@ -307,45 +318,20 @@ def run_agent(
             debug(trace_id, "stream_final_start", round=round_num, model=label,
                   messages_count=len(messages))
             try:
-                stream = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    stream=True,
-                    timeout=STREAM_TIMEOUT,
+                yield from _stream_with_fallback(
+                    client, model, messages, stop_event,
+                    STREAM_TIMEOUT, trace_id, round_num, "stream_final",
                 )
-                chunk_count = 0
-                for chunk in stream:
-                    if stop_event and stop_event.is_set():
-                        debug(trace_id, "agent_stopped", round=round_num)
-                        yield {"type": "stopped"}
-                        return
-                    delta = chunk.choices[0].delta.content
-                    if delta:
-                        chunk_count += 1
-                        yield {"type": "answer_chunk", "content": delta}
-                debug(trace_id, "stream_final_done", round=round_num, model=label,
-                      chunk_count=chunk_count)
-                yield {"type": "answer", "content": ""}
             except Exception as e:
                 log_error(trace_id, "stream_final_failed", exc=e, round=round_num, model=label, query=user_query)
                 retry_event = _next_candidate(e)
                 if retry_event:
                     yield retry_event
                     try:
-                        stream = client.chat.completions.create(
-                            model=model,
-                            messages=messages,
-                            stream=True,
-                            timeout=STREAM_TIMEOUT,
+                        yield from _stream_with_fallback(
+                            client, model, messages, stop_event,
+                            STREAM_TIMEOUT, trace_id, round_num, "stream_final_retry",
                         )
-                        for chunk in stream:
-                            if stop_event and stop_event.is_set():
-                                yield {"type": "stopped"}
-                                return
-                            delta = chunk.choices[0].delta.content
-                            if delta:
-                                yield {"type": "answer_chunk", "content": delta}
-                        yield {"type": "answer", "content": ""}
                     except Exception as e2:
                         log_error(trace_id, "stream_final_retry_failed", exc=e2, round=round_num, model=label, query=user_query)
                         yield {"type": "error", "content": f"调用 LLM API 失败: {str(e2)}", "trace_id": trace_id}
