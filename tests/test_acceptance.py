@@ -332,3 +332,50 @@ class TestStreamEmptyFallback:
 
         assert "answer" in event_types, f"应有 answer 事件，实际: {event_types}"
         assert answer == "这是降级后的回答内容", f"降级后应有回答内容，实际: {answer!r}"
+
+    @patch("agent.agent._build_candidates")
+    def test_stream_empty_non_stream_also_empty_triggers_fallback(self, mock_build_candidates):
+        """流式空 + 非流式也空时，触发模型 fallback 切换到下一个候选模型。"""
+        from agent.agent import run_agent
+
+        answer_resp = _make_answer_response("")
+        answer_resp.choices[0].finish_reason = "stop"
+
+        empty_chunks = [MagicMock(choices=[MagicMock(
+            delta=MagicMock(content=None), finish_reason=None
+        )]) for _ in range(2)]
+
+        # 非流式降级也返回空
+        empty_fallback = MagicMock()
+        empty_fallback.choices = [MagicMock(message=MagicMock(content=""))]
+
+        # 第二个候选模型正常返回
+        answer_resp2 = _make_answer_response("")
+        answer_resp2.choices[0].finish_reason = "stop"
+        good_chunks = _make_stream_chunks("备用模型的回答")
+
+        mock_client1 = MagicMock()
+        mock_client1.chat.completions.create.side_effect = [
+            answer_resp,        # 第一轮决策
+            iter(empty_chunks), # 流式：空内容
+            empty_fallback,     # 非流式降级：也空 → StreamEmptyError
+        ]
+
+        mock_client2 = MagicMock()
+        mock_client2.chat.completions.create.side_effect = [
+            answer_resp2,       # 备用模型第一轮决策
+            iter(good_chunks),  # 备用模型流式正常输出
+        ]
+
+        mock_build_candidates.return_value = [
+            (mock_client1, "glm-5", "bailian/glm-5"),
+            (mock_client2, "qwen-turbo", "bailian/qwen-turbo"),
+        ]
+
+        events = _collect_events(run_agent("测试问题", max_tool_rounds=3))
+        answer = _get_answer(events)
+        event_types = [e["type"] for e in events]
+
+        assert "retry" in event_types, f"应有 retry 事件触发模型切换，实际: {event_types}"
+        assert "answer" in event_types, f"应有 answer 事件，实际: {event_types}"
+        assert answer == "备用模型的回答", f"应输出备用模型内容，实际: {answer!r}"

@@ -149,11 +149,14 @@ else:
     st.session_state.cfg_max_rounds = cfg_max_rounds
     st.session_state.cfg_top_k = cfg_top_k
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def _get_kb_stats():
+    from rag.indexer import _count_by_filter
     total = _count()
-    all_data = _get_all()
-    web = sum(1 for m in all_data["metadatas"] if (m or {}).get("type") == "web_cache")
+    try:
+        web = _count_by_filter("type", "web_cache")
+    except Exception:
+        web = 0
     return total, web
 
 
@@ -208,18 +211,34 @@ def _render_sources(sources: list, query: str = "") -> None:
 
 
 # 展示历史消息
-for msg in st.session_state.messages:
+for _i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("steps"):
-            with st.expander("✅ 完成", expanded=False):
-                for step in msg["steps"]:
-                    if step["kind"] == "retry":
-                        st.warning(step["text"])
-                    else:
-                        st.write(step["text"])
-        if msg.get("sources"):
-            _render_sources(msg["sources"])
+        if msg.get("error"):
+            st.error(msg["error"])
+            # 重试按钮只在最后一条 error 消息上显示
+            if _i == len(st.session_state.messages) - 1:
+                if st.button("🔄 重试", key="error_retry_btn"):
+                    _retry_prompt = msg.get("retry_prompt", "")
+                    # 清除所有连续的 error assistant + 对应的 user 消息
+                    while st.session_state.messages and st.session_state.messages[-1].get("error"):
+                        st.session_state.messages.pop()
+                        if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+                            st.session_state.messages.pop()
+                    st.session_state._msg_appended = False
+                    st.session_state.prefill_input = _retry_prompt
+                    st.rerun()
+        else:
+            if msg["content"]:
+                st.markdown(msg["content"])
+            if msg.get("steps"):
+                with st.expander("✅ 完成", expanded=False):
+                    for step in msg["steps"]:
+                        if step["kind"] == "retry":
+                            st.warning(step["text"])
+                        else:
+                            st.write(step["text"])
+            if msg.get("sources"):
+                _render_sources(msg["sources"])
 
 # ── 用户输入 ──────────────────────────────────────────────
 # chat_input 必须每次都渲染，不能被短路
@@ -227,10 +246,15 @@ _prefill = st.session_state.pop("prefill_input", "") or ""
 _typed = st.chat_input("请输入你的问题...")
 prompt = _prefill or _typed
 
+# 新 prompt 到来时重置 flag，允许追加新的消息对
+if prompt and not st.session_state.get("agent_running"):
+    st.session_state._msg_appended = False
+
 if prompt:
     st.session_state.agent_running = True
     st.session_state.stop_event.clear()
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    if not st.session_state.get("_msg_appended"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -238,6 +262,8 @@ if prompt:
         final_answer = ""
         all_sources = []
         was_stopped = False
+        had_error = False
+        had_error_msg = ""
         steps = []  # 记录思考过程，rerun 后可重建
 
         with st.status("Agent 思考中...", expanded=True) as status:
@@ -281,7 +307,6 @@ if prompt:
 
                 elif event["type"] == "answer":
                     stop_placeholder.empty()
-                    status.update(label="完成", state="complete", expanded=False)
                     gist_increment("queries")
                     if _stats_cache["data"] is not None:
                         _stats_cache["data"]["queries"] = _stats_cache["data"].get("queries", 0) + 1
@@ -295,32 +320,48 @@ if prompt:
                 elif event["type"] == "stopped":
                     was_stopped = True
                     stop_placeholder.empty()
-                    status.update(label="已停止", state="error", expanded=False)
 
                 elif event["type"] == "error":
+                    had_error = True
+                    had_error_msg = event["content"]
                     trace_id = event.get("trace_id", "")
-                    msg = event["content"]
                     if trace_id:
-                        msg += f"\n\n`trace_id: {trace_id}`"
-                    st.error(msg)
+                        had_error_msg += f"\n\n`trace_id: {trace_id}`"
                     stop_placeholder.empty()
-                    status.update(label="出错", state="error", expanded=True)
+
+            # with 块最后一行，一次性更新 status 状态
+            if had_error:
+                status.update(label="出错", state="error", expanded=False)
+            elif was_stopped:
+                status.update(label="已停止", state="error", expanded=False)
+            else:
+                status.update(label="完成", state="complete", expanded=False)
 
         if final_answer:
             st.markdown(final_answer)
             _render_sources(all_sources, query=prompt)
         elif was_stopped:
             st.markdown("_已停止_")
-        elif not was_stopped:
-            # 没有输出也没有停止，说明模型未返回内容
+        elif not was_stopped and not had_error:
+            # 没有输出也没有停止也没有报错，说明模型未返回内容
             st.info("模型本次未返回内容，请重试。")
 
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": final_answer or ("_已停止_" if was_stopped else ""),
-            "sources": all_sources,
-            "steps": steps,
-        })
+        if not st.session_state.get("_msg_appended"):
+            st.session_state._msg_appended = True
+            _msg = {
+                "role": "assistant",
+                "content": final_answer or ("_已停止_" if was_stopped else ""),
+                "sources": all_sources,
+                "steps": steps,
+            }
+            if had_error:
+                _msg["error"] = had_error_msg or "调用失败，请重试"
+                _msg["retry_prompt"] = prompt
+            st.session_state.messages.append(_msg)
+            if had_error:
+                st.session_state.agent_running = False
+                st.session_state.stop_event.clear()
+                st.rerun()
 
     st.session_state.agent_running = False
     st.session_state.stop_event.clear()
@@ -390,11 +431,28 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-    if st.button("🔄 重建知识库", use_container_width=True):
-        try:
-            if _count() > 0:
-                _delete_by_filter("source", "", op="ne")
-        except Exception:
-            pass
-        st.cache_resource.clear()
-        st.rerun()
+    with st.expander("🔄 重建知识库", expanded=False):
+        _admin_pwd = os.getenv("ADMIN_PASSWORD", "")
+        if _admin_pwd:
+            _input_pwd = st.text_input("管理员密码", type="password", key="admin_pwd_input")
+            _confirm = st.button("确认重建", use_container_width=True, disabled=not _input_pwd)
+            if _confirm:
+                if _input_pwd == _admin_pwd:
+                    try:
+                        if _count() > 0:
+                            _delete_by_filter("source", "", op="ne")
+                    except Exception:
+                        pass
+                    st.cache_resource.clear()
+                    st.rerun()
+                else:
+                    st.error("密码错误")
+        else:
+            if st.button("确认重建", use_container_width=True):
+                try:
+                    if _count() > 0:
+                        _delete_by_filter("source", "", op="ne")
+                except Exception:
+                    pass
+                st.cache_resource.clear()
+                st.rerun()

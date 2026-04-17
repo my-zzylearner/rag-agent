@@ -16,6 +16,11 @@ MAX_TOOL_ROUNDS = 4  # 最多调用工具轮次，防止死循环
 STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "120"))  # 流式输出超时秒数，默认 120s
 
 
+class StreamEmptyError(Exception):
+    """流式和非流式补偿都返回空内容，需要切换到下一个候选模型。"""
+    pass
+
+
 def _stream_with_fallback(
     client, model: str, messages: list,
     stop_event, timeout: int,
@@ -53,12 +58,23 @@ def _stream_with_fallback(
     debug(trace_id, f"{event_label}_done", round=round_num, model=model, chunk_count=chunk_count)
     if chunk_count == 0:
         warning(trace_id, f"{event_label}_empty_fallback", round=round_num, model=model)
-        fallback_resp = client.chat.completions.create(
-            model=model, messages=messages, timeout=timeout,
-        )
-        content = (fallback_resp.choices[0].message.content or "").strip()
-        if content:
-            yield {"type": "answer_chunk", "content": content}
+        try:
+            fallback_resp = client.chat.completions.create(
+                model=model, messages=messages, timeout=timeout,
+            )
+            content = (fallback_resp.choices[0].message.content or "").strip()
+            debug(trace_id, f"{event_label}_fallback_result", round=round_num,
+                  model=model, has_content=bool(content), content_len=len(content))
+            if content:
+                yield {"type": "answer_chunk", "content": content}
+            else:
+                raise StreamEmptyError(f"{model} stream and non-stream both returned empty")
+        except StreamEmptyError:
+            raise  # 向外传播，触发外层模型 fallback
+        except Exception as e:
+            warning(trace_id, f"{event_label}_fallback_failed", round=round_num,
+                    model=model, error=str(e)[:120])
+            raise StreamEmptyError(f"{model} fallback failed: {e}") from e
     yield {"type": "answer", "content": ""}
 
 SYSTEM_PROMPT = """你是一个专业的 AI 搜索助手，可以回答各类问题。
@@ -128,7 +144,9 @@ def _build_candidates() -> list:
 
 
 def _should_fallback(exc: Exception) -> bool:
-    """判断异常是否应触发模型降级（额度不足、模型不存在、限流等）。"""
+    """判断异常是否应触发模型降级（额度不足、模型不存在、限流、空内容等）。"""
+    if isinstance(exc, StreamEmptyError):
+        return True
     msg = str(exc).lower()
     fallback_keywords = (
         # 额度 / 计费

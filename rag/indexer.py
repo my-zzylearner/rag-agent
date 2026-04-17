@@ -88,17 +88,18 @@ def _ensure_qdrant_collection():
         )
         _logger.info("qdrant: created collection %s", COLLECTION_NAME)
 
-    # 确保 source 字段有 keyword index，_delete_by_filter 过滤时需要
+    # 确保 source/type 字段有 keyword index，过滤时需要
     try:
         collection_info = client.get_collection(COLLECTION_NAME)
         indexed_fields = set(collection_info.payload_schema.keys()) if collection_info.payload_schema else set()
-        if "source" not in indexed_fields:
-            client.create_payload_index(
-                collection_name=COLLECTION_NAME,
-                field_name="source",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            _logger.info("qdrant: created payload index for 'source'")
+        for field in ("source", "type"):
+            if field not in indexed_fields:
+                client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+                _logger.info("qdrant: created payload index for '%s'", field)
     except Exception as e:
         _logger.warning("qdrant: failed to create payload index: %s", e)
 
@@ -133,6 +134,21 @@ def _count() -> int:
             _logger.error("qdrant _count failed: %s", e)
             return 0
     return get_collection().count()
+
+
+def _count_by_filter(field: str, value: str) -> int:
+    """按 metadata 字段过滤计数，比 _get_all() 轻量。"""
+    if _use_qdrant():
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        client = _get_qdrant_client()
+        result = client.count(
+            collection_name=COLLECTION_NAME,
+            count_filter=Filter(must=[FieldCondition(key=field, match=MatchValue(value=value))]),
+        )
+        return result.count
+    col = get_collection()
+    result = col.get(where={field: {"$eq": value}}, include=[])
+    return len(result["ids"])
 
 
 def _get_all() -> Dict:

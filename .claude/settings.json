@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "statusMessage": "运行验收测试...",
+            "command": "python3 -c \"\nimport sys, json, subprocess, os\ndata = json.load(sys.stdin)\nf = data.get('tool_input', {}).get('file_path') or data.get('tool_response', {}).get('filePath', '')\nif not f:\n    sys.exit(0)\nKEY_FILES = ['agent/agent.py', 'agent/tools.py', 'rag/retriever.py', 'rag/indexer.py']\nroot = os.path.abspath(os.path.join(os.path.dirname(f), '..')) if '/agent/' in f or '/rag/' in f else ''\nif not root:\n    sys.exit(0)\nrel = os.path.relpath(f, root)\nif rel not in KEY_FILES:\n    sys.exit(0)\ntest_path = os.path.join(root, 'tests/test_acceptance.py')\nif not os.path.exists(test_path):\n    sys.exit(0)\nvenv_pytest = os.path.join(root, 'venv/bin/pytest')\ncmd = [venv_pytest, test_path, '-q', '--tb=short'] if os.path.exists(venv_pytest) else ['python3', '-m', 'pytest', test_path, '-q', '--tb=short']\nr = subprocess.run(cmd, capture_output=True, text=True, cwd=root)\nout = (r.stdout.strip() or r.stderr.strip() or 'no output')[:2000]\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': 'acceptance tests:\\n' + out}}))\n\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "检查本次对话中是否有对以下文件的实质性改动：agent/agent.py、agent/tools.py、rag/retriever.py、rag/indexer.py、app.py、utils/gist_store.py。如果有，分析改动内容，判断是否需要更新 /Users/zzy/others/project11/rag-agent/design/agent_optimization.md（更新 TODO 状态、已完成功能列表、变更记录）。如果需要更新，直接写入文件，在变更记录末尾追加今天的日期和改动摘要。如果本次只是查看代码或对话，不涉及代码改动，则跳过。"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -100,7 +100,9 @@ rag-agent/
 │   └── report.md                   # 最新评测报告
 ├── utils/
 │   ├── logger.py                   # 统一日志模块（RotatingFileHandler + stderr）
-│   └── gist_store.py               # GitHub Gist 持久化（访问统计 + 留言板）
+│   └── gist_store.py               # GitHub Gist 持久化（访问统计 + 留言板 + 检索来源统计）
+├── scripts/
+│   └── retrieval_stats.py          # 检索来源分布分析（vec_only / bm25_only / both 占比）
 ├── tests/
 │   ├── test_rag.py                 # RAG 链路单元测试
 │   ├── test_tools.py               # 工具层测试
@@ -129,3 +131,35 @@ venv/bin/pytest tests/ -m slow
 # 验收基线（核心场景行为验证）
 venv/bin/pytest tests/test_acceptance.py -v
 ```
+
+## 运营分析
+
+### 检索来源分布
+
+每次检索后自动记录 BM25 / 向量各自的命中情况，可用脚本查看汇总：
+
+```bash
+# 汇总 + 最近 10 条明细
+venv/bin/python scripts/retrieval_stats.py
+
+# 最近 20 条明细
+venv/bin/python scripts/retrieval_stats.py --tail 20
+
+# 只看汇总
+venv/bin/python scripts/retrieval_stats.py --summary
+```
+
+输出示例：
+
+```
+==================================================
+  检索来源分布统计  （共 42 次查询）
+==================================================
+
+【Chunk 级别来源分布】（每个召回 chunk 的来源）
+  仅向量命中：  28 / 96  █████░░░░░░░░░░░░░░░  29.2%
+  仅BM25命中：  18 / 96  ███░░░░░░░░░░░░░░░░░  18.8%
+  两路都命中：  50 / 96  ██████████░░░░░░░░░░  52.1%
+```
+
+> 需在 `.env` 中配置 `GITHUB_TOKEN` 和 `GIST_ID`，并在对应 Gist 中创建 `rag_agent_retrieval_stats.json`（初始内容：`{"stats": []}`）。
