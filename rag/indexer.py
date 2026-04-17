@@ -76,6 +76,7 @@ def _get_qdrant_client():
     )
 
 
+@functools.lru_cache(maxsize=1)
 def _ensure_qdrant_collection():
     """确保 Qdrant collection 存在，不存在时创建；确保 payload index 存在。"""
     from qdrant_client.models import Distance, VectorParams, PayloadSchemaType

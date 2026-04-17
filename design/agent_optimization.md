@@ -239,3 +239,11 @@ yield {"type": "answer", "content": final_resp.choices[0].message.content}
 - 2026-04-14: 内化质量过滤补充长度检查后撤回（长度不是质量指标，会激励口水话）；新增 tests/test_acceptance.py 验收基线（6 场景，全 mock 离线）
 - 2026-04-15: 混合检索（BM25+向量+RRF）上线；连续追问支持（history 固定窗口 6 轮）；方案E确认：data/docs/ 已在 git，内化文档持久
 - 2026-04-15: Qdrant Cloud 接入（方案B）；indexer 抽象 _count/_get_all/_upsert/_delete_by_ids/_delete_by_filter/_query 六个统一接口，上层无感知后端切换；_use_qdrant() 带连通性探测（5s超时），失败自动降级 ChromaDB；app.py 移除直接依赖 get_collection()
+- 2026-04-16: BM25 缓存改为全局变量 + invalidate_bm25() 主动失效；启动阶段预热 BM25；_count_by_filter() 轻量计数替代 _get_all() 统计；_ensure_qdrant_collection 加 lru_cache 减少重复网络请求
+- 2026-04-16: Gist 拆分为三个独立文件（stats/internalized/retrieval_stats），独立锁互不阻塞；新增 add_retrieval_stat() 记录 BM25/向量命中比例
+- 2026-04-16: 流式空内容降级非流式；StreamEmptyError 触发模型 fallback；_stream_with_fallback 统一三处流式路径
+- 2026-04-16: 超时触发 fallback；流式超时改为 STREAM_TIMEOUT 环境变量（默认120s）
+- 2026-04-17: 错误框存入 messages error 字段，历史渲染时显示；had_error 后主动 rerun 立即渲染；重试按钮清除 error 消息对后重发
+- 2026-04-17: 重建知识库加管理员密码保护（ADMIN_PASSWORD 环境变量）
+- 2026-04-17: status 状态统一在 with 块末尾更新一次，避免被 Streamlit 自动覆盖
+- 2026-04-18: _ensure_qdrant_collection 加 lru_cache，启动时减少重复 Qdrant 网络请求
