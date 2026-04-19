@@ -31,3 +31,5 @@ logs/
 .internalize_error.log
 test_playwright.py
 .internalize_status.json
+design/tech-blog.md
+data/docs/阿里妈妈淘宝联盟介绍.md
