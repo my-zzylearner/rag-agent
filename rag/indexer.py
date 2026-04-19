@@ -5,9 +5,9 @@
 - 配置了 QDRANT_URL + QDRANT_API_KEY → Qdrant Cloud（持久化）
 - 未配置 → 本地 ChromaDB（开发用）
 """
-import os
-import glob
 import functools
+import glob
+import os
 
 # 禁用 chromadb 遥测，必须在 import chromadb 之前设置
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -27,7 +27,7 @@ COLLECTION_NAME = "rag_docs"
 WEB_CACHE_LIMIT = 200
 WEB_CACHE_LIMIT_DAYS = 7
 CHROMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chroma_db")
-VECTOR_SIZE = 384  # all-MiniLM-L6-v2 维度
+VECTOR_SIZE = 512  # bge-small-zh-v1.5 维度
 
 _embedder = None
 
@@ -35,7 +35,7 @@ _embedder = None
 def get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
-        model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
         # 模型已在本地缓存时，禁止联网检查更新，避免每次 encode 触发超时重试
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -89,7 +89,7 @@ def _ensure_qdrant_collection():
         )
         _logger.info("qdrant: created collection %s", COLLECTION_NAME)
 
-    # 确保 source/type 字段有 keyword index，过滤时需要
+    # 确保 source/type 字段有 keyword index，indexed_at 有 integer index，过滤时需要
     try:
         collection_info = client.get_collection(COLLECTION_NAME)
         indexed_fields = set(collection_info.payload_schema.keys()) if collection_info.payload_schema else set()
@@ -101,6 +101,13 @@ def _ensure_qdrant_collection():
                     field_schema=PayloadSchemaType.KEYWORD,
                 )
                 _logger.info("qdrant: created payload index for '%s'", field)
+        if "indexed_at" not in indexed_fields:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="indexed_at",
+                field_schema=PayloadSchemaType.INTEGER,
+            )
+            _logger.info("qdrant: created payload index for 'indexed_at'")
     except Exception as e:
         _logger.warning("qdrant: failed to create payload index: %s", e)
 
@@ -171,6 +178,26 @@ def _get_all() -> Dict:
         return {"ids": ids, "documents": documents, "metadatas": metadatas}
     result = get_collection().get(include=["documents", "metadatas"])
     return result
+
+
+def _get_by_filter(field: str, value: str) -> Dict:
+    """按 metadata 字段过滤，只返回匹配的 {ids, metadatas}，比 _get_all() 轻量。"""
+    if _use_qdrant():
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        client = _get_qdrant_client()
+        records, _ = client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(must=[FieldCondition(key=field, match=MatchValue(value=value))]),
+            limit=10000,
+            with_payload=True,
+            with_vectors=False,
+        )
+        ids = [str(r.id) for r in records]
+        metadatas = [{k: v for k, v in r.payload.items() if k != "document"} for r in records]
+        return {"ids": ids, "metadatas": metadatas}
+    col = get_collection()
+    result = col.get(where={field: {"$eq": value}}, include=["metadatas"])
+    return {"ids": result["ids"], "metadatas": result["metadatas"]}
 
 
 def _upsert(ids: List[str], embeddings: List[List[float]], documents: List[str], metadatas: List[Dict]):
@@ -334,37 +361,41 @@ def chunk_text(text: str, source: str) -> List[Dict]:
 
 # ── 公开接口 ──────────────────────────────────────────────────
 
-def index_documents(docs_dir: str = "./data/docs") -> int:
-    embedder = get_embedder()
-
-    # 清空旧数据
-    if _count() > 0:
-        _delete_by_filter("source", "", op="ne")
-
-    docs = load_documents(docs_dir)
+def _index_docs_list(docs: List[Dict], id_prefix: str = "chunk") -> int:
+    """
+    公共索引逻辑：对一批已解析的文档执行 chunk → embed → upsert → invalidate_bm25。
+    docs 格式：[{"text": str, "source": str, "meta": dict}, ...]
+    id_prefix：chunk ID 前缀，全量重建用 "chunk"，单文件用 "chunk_{filename}"。
+    返回写入的 chunk 数。
+    """
     if not docs:
         return 0
 
+    embedder = get_embedder()
     all_chunks = []
     for doc in docs:
         for chunk in chunk_text(doc["text"], doc["source"]):
             chunk["meta"] = doc.get("meta", {})
             all_chunks.append(chunk)
 
+    if not all_chunks:
+        return 0
+
     texts = [c["text"] for c in all_chunks]
     sources = [c["source"] for c in all_chunks]
     metas = [c["meta"] for c in all_chunks]
-    ids = [f"chunk_{i}" for i in range(len(all_chunks))]
+    ids = [f"{id_prefix}_{i}" for i in range(len(all_chunks))]
     embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
 
+    now_ts = int(time.time())
     _upsert(
         ids=ids,
         embeddings=embeddings,
         documents=texts,
-        metadatas=[{"source": s, "topic": m.get("topic", ""), "type": m.get("type", "knowledge_base")}
+        metadatas=[{"source": s, "topic": m.get("topic", ""), "type": m.get("type", "knowledge_base"),
+                    "indexed_at": now_ts}
                    for s, m in zip(sources, metas)],
     )
-    _logger.info("index_documents: indexed %d chunks from %d docs in %s", len(all_chunks), len(docs), docs_dir)
 
     from rag.retriever import invalidate_bm25
     invalidate_bm25()
@@ -372,15 +403,26 @@ def index_documents(docs_dir: str = "./data/docs") -> int:
     return len(all_chunks)
 
 
+def index_documents(docs_dir: str = "./data/docs") -> int:
+    """全量重建：清空所有 knowledge_base 数据，重新扫描目录写入。"""
+    if _count() > 0:
+        _delete_by_filter("source", "", op="ne")
+
+    docs = load_documents(docs_dir)
+    count = _index_docs_list(docs, id_prefix="chunk")
+    _logger.info("index_documents: indexed %d chunks from %d docs in %s", count, len(docs), docs_dir)
+    return count
+
+
 def is_indexed() -> bool:
     return _count() > 0
 
 
 def index_single_document(filepath: str) -> int:
-    embedder = get_embedder()
+    """增量更新：删除该文件的旧 chunks，重新解析写入。"""
     filename = os.path.basename(filepath)
 
-    # 删除该文件的旧 chunks
+    # 先删该文件的旧 chunks，再写新的（内容变化时旧 ID 失效，靠 source 字段做范围删除）
     _delete_by_filter("source", filename, op="eq")
 
     try:
@@ -390,27 +432,8 @@ def index_single_document(filepath: str) -> int:
         return 0
 
     meta, text = _parse_frontmatter(content)
-    chunks = chunk_text(text, filename)
-    if not chunks:
-        return 0
-
-    texts = [c["text"] for c in chunks]
-    ids = [f"chunk_{filename}_{i}" for i in range(len(chunks))]
-    embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
-
-    _upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=[{"source": filename, "topic": meta.get("topic", ""), "type": meta.get("type", "knowledge_base")}
-                   for _ in chunks],
-    )
-
-    # 索引更新后失效 BM25 缓存，下次查询时重建
-    from rag.retriever import invalidate_bm25
-    invalidate_bm25()
-
-    return len(chunks)
+    doc = {"text": text, "source": filename, "meta": meta}
+    return _index_docs_list([doc], id_prefix=f"chunk_{filename}")
 
 
 def add_chunks(chunks: List[Dict]) -> int:
@@ -436,13 +459,9 @@ def add_chunks(chunks: List[Dict]) -> int:
     embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
     _upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
 
-    # web_cache 上限 + TTL 清理
-    all_data = _get_all()
-    web_pairs = [
-        (id_, meta)
-        for id_, meta in zip(all_data["ids"], all_data["metadatas"])
-        if id_.startswith("web_") or (meta or {}).get("type") == "web_cache"
-    ]
+    # web_cache 上限 + TTL 清理（只读 web_cache 条目，不全量拉取）
+    web_data = _get_by_filter("type", "web_cache")
+    web_pairs = list(zip(web_data["ids"], web_data["metadatas"]))
     if len(web_pairs) > WEB_CACHE_LIMIT:
         web_pairs.sort(key=lambda x: x[1].get("added_at", 0))
         to_delete = [id_ for id_, _ in web_pairs[:len(web_pairs) - WEB_CACHE_LIMIT]]

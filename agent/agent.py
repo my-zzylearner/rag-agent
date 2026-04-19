@@ -95,6 +95,11 @@ SYSTEM_PROMPT = """你是一个专业的 AI 搜索助手，可以回答各类问
 - 禁止生成任何未经工具返回的 URL、链接或参考资料
 - 用中文回答
 - 严禁在回答中说"让我继续搜索"、"我将搜索"、"需要进一步查询"等话——要么直接调用工具，要么基于已有结果给出完整回答
+- 每次回答结束后，另起一行输出 3 个追问建议，格式：
+  **你可能还想问：**
+  1. 问题一
+  2. 问题二
+  3. 问题三
 """
 
 
@@ -171,6 +176,7 @@ def run_agent(
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     top_k: int = 4,
     history: Optional[list] = None,
+    allowed_tools: Optional[list] = None,  # None=全部工具，["search_knowledge_base"] 等限定工具
 ) -> Generator[Dict[str, Any], None, None]:
     """
     Agent 主循环，使用 generator 流式返回事件：
@@ -205,8 +211,24 @@ def run_agent(
         # 取最近 HISTORY_WINDOW 轮（每轮 2 条），排除最后一条（当前 user query 还没加）
         history_messages = valid[-(HISTORY_WINDOW * 2):]
 
+    # 根据 allowed_tools 过滤工具列表
+    _active_tools = TOOLS
+    if allowed_tools is not None:
+        _active_tools = [t for t in TOOLS if t["function"]["name"] in allowed_tools]
+
+    # 单工具模式时在 system prompt 开头插入强制限定，覆盖路由规则
+    _system_content = SYSTEM_PROMPT + f"\n\n当前日期：{today}"
+    if allowed_tools and len(allowed_tools) == 1:
+        _tool_hints = {
+            "search_knowledge_base": "【强制限定】本次只能使用 search_knowledge_base，禁止调用 search_web，无论问题类型。知识库无结果时直接基于已有信息回答，不得调用其他工具。\n\n",
+            "search_web": "【强制限定】本次只能使用 search_web，禁止调用 search_knowledge_base，无论问题类型。\n\n",
+        }
+        _hint = _tool_hints.get(allowed_tools[0], "")
+        if _hint:
+            _system_content = _hint + _system_content
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + f"\n\n当前日期：{today}"},
+        {"role": "system", "content": _system_content},
         *history_messages,
         {"role": "user", "content": user_query},
     ]
@@ -258,7 +280,7 @@ def run_agent(
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=TOOLS,
+                tools=_active_tools if _active_tools else None,
             )
         except Exception as e:
             log_error(trace_id, "llm_call_failed", exc=e, round=round_num, model=label, query=user_query)

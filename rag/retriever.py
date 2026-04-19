@@ -2,20 +2,67 @@
 混合检索：BM25 + 向量检索，RRF 融合排序
 """
 import re
-import functools
 from typing import List, Dict, Tuple
-from .indexer import get_embedder, _count, _get_all, _query
+
 from utils.logger import get_logger
+from .indexer import get_embedder, _count, _get_all, _query
 
 _logger = get_logger(__name__)
 
 TOP_K = 4
 RRF_K = 60  # RRF 平滑常数，标准值 60
 
+# ── jieba 模块级初始化（懒加载，首次使用时触发，词典只加载一次）────────────
+# 利用 Python sys.modules 缓存：import 同一模块多次只有第一次真正加载词典
+_pseg = None       # jieba.posseg，加载成功后缓存
+_jieba_ok = None   # True=可用，False=未安装，None=未检测
+
+# 词性过滤常量：保留实词（名词/动词/形容词/数字/英文），过滤虚词
+_KEEP_PREFIX = {"n", "v", "a", "m"}
+_KEEP_FLAG = {"eng", "x"}
+_SINGLE_SYMBOL = re.compile(r'^[_\-\+\*/\\|<>=~`@#$%^&]+$')
+_FALLBACK_SPLIT = re.compile(
+    r"[\s\u3000\uff0c\u3002\uff01\uff1f\u300a\u300b\u3010\u3011\u2014\u2026，。！？《》【】—…、]+"
+)
+
+
+def _init_jieba():
+    """首次调用时尝试加载 jieba，结果缓存到模块变量，后续调用直接返回。"""
+    global _pseg, _jieba_ok
+    if _jieba_ok is not None:
+        return _jieba_ok
+    try:
+        import jieba
+        import jieba.posseg as pseg
+        jieba.setLogLevel("ERROR")  # 静默模式，只需设置一次
+        _pseg = pseg
+        _jieba_ok = True
+        _logger.debug("jieba initialized successfully")
+    except ImportError:
+        _jieba_ok = False
+        _logger.warning("jieba not installed, BM25 will use simple tokenizer (Chinese recall degraded)")
+    return _jieba_ok
+
 
 def _tokenize(text: str) -> List[str]:
-    """简单分词：按空白和标点切分，保留长度 >= 1 的词元。"""
-    return [t for t in re.split(r"[\s\u3000\uff0c\u3002\uff01\uff1f\u300a\u300b\u3010\u3011\u2014\u2026，。！？《》【】—…、]+", text.lower()) if t]
+    """
+    中英文混合分词，基于 jieba 词性标注过滤虚词：
+    - 保留实词：名词(n*/nr/ns/nt/nz)、动词(v*/vn/vd)、形容词(a*)、英文(eng/x)、数字(m)
+    - 过滤虚词：助词(u*/uj)、连词(c)、介词(p)、语气词(y)、叹词(e)、标点符号等
+    - 额外过滤：单个符号（如 _ ）、空白词元
+    jieba 词典只在首次调用 _init_jieba() 时加载一次，后续复用 sys.modules 缓存。
+    未安装 jieba 时自动降级为按标点切分。
+    """
+    if _init_jieba():
+        words = _pseg.lcut(text.lower())
+        return [
+            w.word for w in words
+            if w.word.strip()
+            and not _SINGLE_SYMBOL.match(w.word)
+            and (w.flag[:1] in _KEEP_PREFIX or w.flag in _KEEP_FLAG)
+        ]
+    # 降级：按标点/空白切分
+    return [t for t in _FALLBACK_SPLIT.split(text.lower()) if t]
 
 
 def _rrf_score(rank: int) -> float:
@@ -138,8 +185,9 @@ def retrieve(query: str, top_k: int = TOP_K) -> List[Dict]:
         })
 
     # 日志（INFO 级别，DEBUG=true 时在 Streamlit Cloud Logs 可见）
-    _logger.info("retrieve: query=%r top_k=%d vec_only=%d bm25_only=%d both=%d total=%d",
-                 query, top_k, vec_only, bm25_only, both, len(chunks))
+    score_range = (round(min(c["score"] for c in chunks), 6), round(max(c["score"] for c in chunks), 6)) if chunks else (0, 0)
+    _logger.info("retrieve: query=%r top_k=%d vec_only=%d bm25_only=%d both=%d total=%d score_range=%s",
+                 query, top_k, vec_only, bm25_only, both, len(chunks), score_range)
 
     # 异步持久化到 Gist（失败静默）
     try:

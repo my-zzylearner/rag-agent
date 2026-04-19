@@ -6,9 +6,8 @@
 """
 import glob
 import os
-import json
-import hashlib
 from datetime import datetime
+
 from openai import OpenAI
 
 from rag.indexer import index_single_document
@@ -60,6 +59,65 @@ REALTIME_KEYWORDS = [
 ]
 
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "docs")
+
+# 预定义知识领域分类，用于新建文件时生成稳定的 description，避免按 query 命名导致语义分散
+_DOMAIN_CATALOG = [
+    {
+        "name": "rag_introduction",
+        "label": "RAG 系统",
+        "description": "介绍RAG（检索增强生成）的完整技术原理，包括离线索引与在线检索流程、Chunking分块策略、Embedding模型选型、查询优化（HyDE/多查询/改写）及检索优化（混合检索/Reranking）方向，适用于判断与RAG系统构建、优化相关的知识路由。",
+    },
+    {
+        "name": "vector_databases",
+        "label": "向量数据库",
+        "description": "对比主流向量数据库（Chroma/Pinecone/Milvus/Qdrant/Weaviate/FAISS）的特性与适用场景，包含选型决策建议、HNSW/IVF等核心索引算法原理及生产化注意事项，适用于判断与向量数据库选型、部署和索引算法相关的知识路由。",
+    },
+    {
+        "name": "search_algorithms",
+        "label": "搜索与检索算法",
+        "description": "覆盖信息检索全链路算法，包括BM25关键词检索、向量语义检索、RRF混合检索融合策略、Cross-Encoder重排序（Reranking）及Learning to Rank三种范式，适用于判断与搜索算法原理、检索策略设计和排序模型相关的知识路由。",
+    },
+    {
+        "name": "llm_agent_architecture",
+        "label": "LLM Agent 架构",
+        "description": "介绍LLM Agent的核心架构（规划/工具/记忆/执行循环）、Function Calling机制、ReAct推理框架、LangGraph状态机及Multi-Agent协作模式，适用于判断与智能体设计、工具调用、Agent框架选型相关的知识路由。",
+    },
+    {
+        "name": "llm_evaluation_frameworks",
+        "label": "LLM 评测框架与方法",
+        "description": "覆盖大模型评测全链路，包括评测框架（DeepEval/RAGAS/TruLens/OpenCompass）、RAG评测指标（忠实性/相关性/召回率）、项目效果评估方法及自动化评测流水线设计，适用于判断与评测框架选型、评测体系建设相关的知识路由。",
+    },
+    {
+        "name": "llm_evaluation_benchmark",
+        "label": "LLM 评测 Benchmark",
+        "description": "介绍主流LLM能力评测基准（MMLU、HumanEval、HELM、MT-Bench、AlpacaEval、C-Eval），覆盖知识/推理/代码/安全等评测维度及各基准的局限性，适用于判断与模型能力评估、Benchmark选型相关的知识路由。",
+    },
+    {
+        "name": "ragas_installation_and_integration_tutorial",
+        "label": "RAGAS 使用教程",
+        "description": "介绍RAGAS评测框架的安装配置、核心指标（忠实度/答案相关性/上下文召回率）原理及与RAG Pipeline的集成方式，适用于判断与RAGAS具体使用、RAG系统评测质量相关的知识路由。",
+    },
+    {
+        "name": "recommendation_system_cf_comparison",
+        "label": "推荐系统算法",
+        "description": "介绍推荐系统核心算法，包括基于用户/物品的协同过滤、矩阵分解、相似度计算（余弦/皮尔逊/Jaccard）、冷启动问题及召回-排序两阶段架构，适用于判断与推荐算法原理、工程实现相关的知识路由。",
+    },
+    {
+        "name": "ai_search_one_month_review",
+        "label": "AI 搜索技术学习",
+        "description": "覆盖AI搜索技术全链路学习路线，包括语义检索、向量召回、混合检索、Reranking、RAG系统构建及搜索系统评测方法，适用于判断与AI搜索技术学习、工程实践相关的知识路由。",
+    },
+    {
+        "name": "chinese_segmentation_comparison",
+        "label": "中文分词技术",
+        "description": "对比主流中文分词方案（jieba精确/全模式/posseg词性标注、IK Analyzer、最大正向匹配、CRF、HanLP）的原理、分词精度与适用场景，适用于判断与NLP分词、BM25索引构建相关的知识路由。",
+    },
+    {
+        "name": "agent-harness-engineer",
+        "label": "LLM Agent 工程实践",
+        "description": "深度介绍LLM Agent工程实践，包括控制流设计、Harness测试基础设施、上下文分层管理、ACI工具设计、记忆系统、多Agent协作协议、评测体系和安全边界，适用于判断与Agent工程落地、Harness测试相关的知识路由。",
+    },
+]
 
 
 # ──────────────────────────────────────────────
@@ -139,7 +197,7 @@ def _call_with_fallback(fn, query, candidates, *args):
 
 
 def _internalize(query: str, results: list, client, model: str) -> None:
-    """Step 1 ~ Step 5 完整流程，内部自动 fallback。"""
+    """Step 1 ~ Step 6 完整流程，内部自动 fallback。"""
     candidates = _build_internalize_candidates(client, model)
 
     # Step 1 — 分类判断：实时类直接跳过
@@ -373,40 +431,101 @@ def _sanitize_filename(raw: str) -> str:
     return cleaned
 
 
+def _create_domain_file(name: str, label: str, description: str) -> str:
+    """写入带 frontmatter 的新领域文件，返回绝对路径。文件已存在时直接复用。"""
+    filename = name if name.endswith(".md") else name + ".md"
+    filepath = os.path.join(DOCS_DIR, filename)
+    if not os.path.exists(filepath):
+        frontmatter = (
+            f"---\n"
+            f"topic: {label}\n"
+            f"keywords: \n"
+            f"description: {description}\n"
+            f"type: knowledge_base\n"
+            f"---\n\n"
+        )
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(frontmatter)
+        _logger.info("_create_domain_file: created %s", filename)
+    else:
+        _logger.info("_create_domain_file: reusing existing %s", filename)
+    return filepath
+
+
 def _new_file(query: str, client, model: str) -> str:
-    """让 LLM 生成文件名，新建带 frontmatter 的空文件，返回绝对路径。"""
+    """
+    当 _route 找不到合适的已有文件时调用。
+    优先从 _DOMAIN_CATALOG 预定义分类中匹配，
+    若所有分类都不合适，让 LLM 生成新的领域级 description 并新建文件。
+    新建的文件写入稳定的领域级 description，后续 _route 扫描时可自动发现。
+    """
+    import re as _re
+
+    # ── Step 1：让 LLM 从预定义分类中选，或回答 new ──
+    options = "\n".join(
+        f"{i + 1}. {d['label']}：{d['description'][:60]}..."
+        for i, d in enumerate(_DOMAIN_CATALOG)
+    )
     messages = [
         {
-            "role": "user",
+            "role": "system",
             "content": (
-                "只返回文件名，如 recommendation_system.md，不要解释。\n"
-                f"主题：{query}"
+                "根据搜索词，从以下知识领域分类中选择最合适的一个。\n"
+                "如果所有分类都不合适，回答 new。\n"
+                "只回答编号（如 1）或 new，不要解释。\n\n"
+                f"分类列表：\n{options}"
             ),
         },
+        {
+            "role": "user",
+            "content": f"搜索词：{query}",
+        },
     ]
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0,
-    )
-    raw_name = response.choices[0].message.content.strip()
-    filename = _sanitize_filename(raw_name)
-    filepath = os.path.join(DOCS_DIR, filename)
+    response = client.chat.completions.create(model=model, messages=messages, temperature=0)
+    answer = response.choices[0].message.content.strip().lower()
 
-    # 推导 topic：去掉 .md 后缀，下划线换空格
-    topic = filename[:-3].replace("_", " ")
-    frontmatter = (
-        f"---\n"
-        f"topic: {topic}\n"
-        f"keywords: \n"
-        f"description: {query} 相关知识\n"
-        f"type: knowledge_base\n"
-        f"---\n\n"
-    )
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(frontmatter)
-    return filepath
+    # ── Step 2：命中预定义分类 ──
+    m = _re.search(r"\d+", answer)
+    if m and "new" not in answer:
+        idx = int(m.group()) - 1
+        if 0 <= idx < len(_DOMAIN_CATALOG):
+            domain = _DOMAIN_CATALOG[idx]
+            return _create_domain_file(domain["name"], domain["label"], domain["description"])
+
+    # ── Step 3：LLM 认为需要新分类，生成领域级 description ──
+    _logger.info("_new_file: LLM requested new domain for query=%r", query)
+    desc_messages = [
+        {
+            "role": "system",
+            "content": (
+                "为新知识领域生成一个用于知识路由的领域描述，要求：\n"
+                "1. 描述领域范围，列举核心技术概念（3~5个关键词）\n"
+                "2. 末尾加一句：'适用于判断与<主题>相关的知识路由。'\n"
+                "3. 控制在 80 字以内，只输出描述文本，不要解释\n\n"
+                "同时在第一行输出文件名（snake_case，不含 .md），第二行开始输出描述。\n"
+                "格式示例：\n"
+                "nlp_basics\n"
+                "介绍NLP基础技术，包括...，适用于判断与NLP基础相关的知识路由。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"搜索词：{query}",
+        },
+    ]
+    desc_resp = client.chat.completions.create(model=model, messages=desc_messages, temperature=0)
+    raw = desc_resp.choices[0].message.content.strip()
+    lines = raw.splitlines()
+
+    # 解析文件名和描述
+    raw_name = _sanitize_filename(lines[0].strip()) if lines else "misc_ai_knowledge.md"
+    description = "\n".join(lines[1:]).strip() if len(lines) > 1 else f"{query} 相关知识"
+    label = raw_name[:-3].replace("_", " ") if raw_name.endswith(".md") else raw_name
+
+    _logger.info("_new_file: creating new domain file=%s for query=%r", raw_name, query)
+    return _create_domain_file(raw_name[:-3] if raw_name.endswith(".md") else raw_name,
+                               label, description)
 
 
 def _route(query: str, refined: str, client, model: str) -> str:
@@ -467,22 +586,10 @@ def _route(query: str, refined: str, client, model: str) -> str:
 # ──────────────────────────────────────────────
 
 def _append_to_file(filepath: str, query: str, refined: str) -> None:
-    """将提炼内容追加到目标文件，写入前检查重复。"""
-    query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
-
-    # 检查文件末尾 2000 字节，避免重复追加同一 query
+    """将提炼内容追加到目标文件。重复内容由 consolidate_docs.py 周期整理处理，此处不做去重。"""
     if os.path.exists(filepath):
-        with open(filepath, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            tail_start = max(0, size - 2000)
-            f.seek(tail_start)
-            tail = f.read().decode("utf-8", errors="ignore")
-        if query_hash in tail:
-            return
         mode = "a"
     else:
-        # 新建文件，确保目录存在
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         mode = "w"
 
@@ -490,7 +597,7 @@ def _append_to_file(filepath: str, query: str, refined: str) -> None:
     block = (
         f"\n\n---\n"
         f"## 补充知识（来自网络搜索）\n"
-        f"> query: {query} | 更新时间: {today} | hash: {query_hash}\n\n"
+        f"> query: {query} | 更新时间: {today}\n\n"
         f"{refined}\n"
     )
 

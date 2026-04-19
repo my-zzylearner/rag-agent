@@ -97,6 +97,7 @@ def search_web(query: str, llm_client=None, llm_model: str = "") -> Dict:
                 "content": r.get("content", ""),
                 "source": r.get("url", ""),
                 "title": r.get("title", ""),
+                "relevance_score": 1.0,  # 网络结果无 RRF 分，设为 1.0 确保展示
             }
             for r in response.get("results", [])
         ]

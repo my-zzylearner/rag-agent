@@ -73,9 +73,7 @@ _stats_cache = _load_stats_once()
 @st.cache_resource
 def _warm_up_embedder():
     from rag.indexer import get_embedder
-    embedder = get_embedder()
-    embedder.encode(["warm up"])
-    return embedder
+    return get_embedder()
 
 
 @st.cache_resource
@@ -103,11 +101,6 @@ if "startup_done" not in st.session_state:
         st.write("✅ 检索索引已就绪")
         _startup_status.update(label="启动完成", state="complete", expanded=False)
     st.session_state.startup_done = True
-else:
-    _warm_up_embedder()
-    chunk_count = init_index()
-    from rag.retriever import warm_up_bm25
-    warm_up_bm25()
 
 # ── 状态初始化 ────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -149,6 +142,7 @@ else:
     st.session_state.cfg_max_rounds = cfg_max_rounds
     st.session_state.cfg_top_k = cfg_top_k
 
+
 @st.cache_data(ttl=300)
 def _get_kb_stats():
     from rag.indexer import _count_by_filter
@@ -172,10 +166,32 @@ try:
 except Exception:
     st.sidebar.caption("知识库：统计加载中...")
 
-RELEVANCE_THRESHOLD = 0.3  # 低于此相关度的检索结果不展示
+RELEVANCE_THRESHOLD = 0.01  # RRF 融合分范围约 0.016~0.033，低于此值不展示
 
 
-def _render_sources(sources: list, query: str = "") -> None:
+def _parse_citations(answer: str):
+    """从回答末尾提取 [N] source 格式的引用列表，返回 (正文, {N: source_str})。
+    解析失败时返回 (原始回答, {})。"""
+    import re
+    lines = answer.strip().split("\n")
+    citation_map = {}
+    body_end = len(lines)
+    # 从末尾往前找连续的 [N] source 行
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i].strip()
+        if not line:
+            continue
+        m = re.match(r"^\[(\d+)\]\s+(.+)$", line)
+        if m:
+            citation_map[int(m.group(1))] = m.group(2)
+            body_end = i
+        else:
+            break
+    body = "\n".join(lines[:body_end]).strip()
+    return body, citation_map
+
+
+def _render_sources(sources: list, query: str = "", citation_map: dict = None) -> None:
     """统一渲染参考来源，过滤低相关度结果。若传入 query 则高亮关键词。"""
     import re
 
@@ -200,14 +216,28 @@ def _render_sources(sources: list, query: str = "") -> None:
         return text
 
     filtered = [s for s in sources if s.get("relevance_score", 0) >= RELEVANCE_THRESHOLD]
-    if not filtered:
+    if not filtered and not citation_map:
         return
     with st.expander("📎 参考来源", expanded=False):
+        if citation_map:
+            for n in sorted(citation_map):
+                st.caption(f"[{n}] {citation_map[n]}")
+            if filtered:
+                st.divider()
+        seen = set()
+        _n = 0
         for src in filtered:
-            score = src.get("relevance_score", "")
-            snippet = src["content"].replace("\n", " ").strip()[:120]
-            st.caption(f"📄 {src['source']}　相关度 {score}")
-            st.markdown(_highlight(snippet, query) + "…")
+            source = src["source"]
+            if source in seen:
+                continue
+            seen.add(source)
+            _n += 1
+            title = src.get("title", "")
+            if source.startswith("http"):
+                label = title or source
+                st.caption(f"[{_n}] [{label}]({source})")
+            else:
+                st.caption(f"[{_n}] 📄 {source}")
 
 
 # 展示历史消息
@@ -265,6 +295,7 @@ if prompt:
         had_error = False
         had_error_msg = ""
         steps = []  # 记录思考过程，rerun 后可重建
+        _body = ""  # 去掉末尾引用列表后的正文，用于存入 session_state
 
         with st.status("Agent 思考中...", expanded=True) as status:
             stop_placeholder = st.empty()
@@ -275,6 +306,7 @@ if prompt:
 
             # 传入历史消息（不含当前 prompt，run_agent 内部会追加）
             _history = st.session_state.messages[:-1]
+
             for event in run_agent(
                 prompt,
                 stop_event=st.session_state.stop_event,
@@ -296,8 +328,7 @@ if prompt:
                     line = f"  → 获取到 {len(results)} 条结果"
                     st.write(line)
                     steps.append({"kind": "tool_result", "text": line})
-                    if event["tool"] == "search_knowledge_base":
-                        all_sources.extend(results)
+                    all_sources.extend(results)
 
                 elif event["type"] == "answer_chunk":
                     if stream_ph[0] is None:
@@ -307,6 +338,8 @@ if prompt:
 
                 elif event["type"] == "answer":
                     stop_placeholder.empty()
+                    if stream_ph[0] is not None:
+                        stream_ph[0].empty()  # 清空 status 内的流式内容，避免折叠后冗余展示
                     gist_increment("queries")
                     if _stats_cache["data"] is not None:
                         _stats_cache["data"]["queries"] = _stats_cache["data"].get("queries", 0) + 1
@@ -362,6 +395,7 @@ if prompt:
                 st.session_state.agent_running = False
                 st.session_state.stop_event.clear()
                 st.rerun()
+
 
     st.session_state.agent_running = False
     st.session_state.stop_event.clear()

@@ -1,7 +1,7 @@
 ---
-topic: chinese segmentation comparison
+topic: 中文分词
 keywords: 
-description: 中文分词方式 jieba IK 最大匹配 CRF 优缺点对比 相关知识
+description: 对比主流中文分词方案（jieba精确模式/全模式/posseg词性标注、IK Analyzer、最大正向匹配、CRF、HanLP）的原理、分词精度与适用场景，适用于判断与NLP分词、BM25索引构建相关的知识路由。
 type: knowledge_base
 ---
 

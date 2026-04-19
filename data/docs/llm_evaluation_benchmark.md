@@ -1,7 +1,7 @@
 ---
-topic: llm evaluation benchmark
+topic: LLM 评测 Benchmark
 keywords: 
-description: AI评测系统 LLM evaluation benchmark 除了Ragas 相关知识
+description: 介绍主流LLM评测基准（MMLU、HumanEval、HELM、MT-Bench、AlpacaEval）的设计原理、评测维度与局限性，适用于判断与LLM能力评估、模型选型相关的知识路由。
 type: knowledge_base
 ---
 
