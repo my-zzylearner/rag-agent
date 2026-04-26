@@ -21,7 +21,7 @@ if os.path.exists(_env_file):
                 os.environ.pop(_line.split("=", 1)[0].strip(), None)
 load_dotenv(_env_file)
 
-from rag.indexer import index_documents, is_indexed, _count, _get_all, _delete_by_filter  # noqa: E402
+from rag.indexer import index_documents, index_documents_incremental, is_indexed, _count, _get_all, _delete_by_filter  # noqa: E402
 from agent.agent import run_agent  # noqa: E402
 from utils.gist_store import load as gist_load, increment as gist_increment, add_feedback as gist_add_feedback  # noqa: E402
 
@@ -469,12 +469,15 @@ with st.sidebar:
         _admin_pwd = os.getenv("ADMIN_PASSWORD", "")
         if _admin_pwd:
             _input_pwd = st.text_input("管理员密码", type="password", key="admin_pwd_input")
-            _confirm = st.button("确认重建", use_container_width=True, disabled=not _input_pwd)
-            if _confirm:
+            _confirm_incr = st.button("更新文档（保留网络缓存）", use_container_width=True, disabled=not _input_pwd)
+            _confirm_full = st.button("全量重建（清空所有数据）", use_container_width=True, disabled=not _input_pwd)
+            if _confirm_incr or _confirm_full:
                 if _input_pwd == _admin_pwd:
                     try:
-                        if _count() > 0:
+                        if _confirm_full and _count() > 0:
                             _delete_by_filter("source", "", op="ne")
+                        elif _confirm_incr:
+                            index_documents_incremental()
                     except Exception:
                         pass
                     st.cache_resource.clear()
@@ -482,7 +485,14 @@ with st.sidebar:
                 else:
                     st.error("密码错误")
         else:
-            if st.button("确认重建", use_container_width=True):
+            if st.button("更新文档（保留网络缓存）", use_container_width=True):
+                try:
+                    index_documents_incremental()
+                except Exception:
+                    pass
+                st.cache_resource.clear()
+                st.rerun()
+            if st.button("全量重建（清空所有数据）", use_container_width=True):
                 try:
                     if _count() > 0:
                         _delete_by_filter("source", "", op="ne")

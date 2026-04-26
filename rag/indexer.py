@@ -414,6 +414,15 @@ def index_documents(docs_dir: str = "./data/docs") -> int:
     return count
 
 
+def index_documents_incremental(docs_dir: str = "./data/docs") -> int:
+    """增量重建：只清除 knowledge_base 类型数据，保留网络缓存，重新扫描目录写入。"""
+    _delete_by_filter("type", "knowledge_base", op="eq")
+    docs = load_documents(docs_dir)
+    count = _index_docs_list(docs, id_prefix="chunk")
+    _logger.info("index_documents_incremental: indexed %d chunks from %d docs in %s", count, len(docs), docs_dir)
+    return count
+
+
 def is_indexed() -> bool:
     return _count() > 0
 

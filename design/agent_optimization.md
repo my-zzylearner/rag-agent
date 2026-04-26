@@ -124,6 +124,7 @@ metadata: {"source": url, "type": "web_cache"}
 | 6 | ChromaDB 持久化（方案B） | 🟡 中 | ✅ 已完成 | 配置 QDRANT_URL+QDRANT_API_KEY 自动切换 Qdrant Cloud，未配置降级本地 ChromaDB；indexer 抽象统一接口 |
 | 15 | 连续追问（多轮对话记忆） | 🟡 中 | ✅ 已完成 | run_agent 新增 history 参数，固定窗口 6 轮（12条），app.py 传入 session_state.messages |
 | 7 | Reranking | 🟢 低 | ⏳ 待实现 | Cross-Encoder 重排召回结果，适合知识库规模较大后再加 |
+| 18 | RRF 召回阈值过滤 | 🟡 中 | ⏳ 待实现 | retrieve() 中对 RRF 融合分加 MIN_SCORE 阈值过滤，去除低相关度噪声 chunk，减少 LLM 幻觉风险 |
 | 16 | 思维过程展示（Thinking） | 🟡 中 | ⏳ 待评估 | 展示 LLM 内部推理链路，见设计文档 |
 | 8 | 用户隔离 | 🟢 低 | ⏳ 待实现 | 内化内容目前全局共享，考虑按 session 隔离或管理员审核机制 |
 | 9 | UI 美化 | 🟢 低 | ⏳ 待实现 | 页面视觉优化：配色、字体、间距、卡片样式；设计专属图标 |
