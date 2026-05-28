@@ -8,13 +8,13 @@
 import functools
 import glob
 import os
+import time
 
 # 禁用 chromadb 遥测，必须在 import chromadb 之前设置
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
 import hashlib
 import re
-import time
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 
@@ -36,11 +36,47 @@ def get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
         model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
-        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-        # 模型已在本地缓存时，禁止联网检查更新，避免每次 encode 触发超时重试
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-        os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-        _embedder = SentenceTransformer(model_name)
+        # 自动化策略：
+        # 1) 优先本地缓存（无网络、最快）
+        # 2) 本地缺失时自动联网补齐并落缓存（仅首次）
+        # 3) 镜像异常时自动回退官方源
+        # 4) 可通过 EMBEDDING_OFFLINE=true 强制纯离线
+        embedding_offline = os.getenv("EMBEDDING_OFFLINE", "false").lower() == "true"
+        auto_download = os.getenv("EMBEDDING_AUTO_DOWNLOAD", "true").lower() == "true"
+        retry_times = max(int(os.getenv("EMBEDDING_DOWNLOAD_RETRIES", "2")), 0)
+        if embedding_offline:
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            _embedder = SentenceTransformer(model_name, local_files_only=True)
+            return _embedder
+
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        os.environ.pop("HF_DATASETS_OFFLINE", None)
+
+        # 先尝试只读本地缓存，命中则完全不联网。
+        try:
+            _embedder = SentenceTransformer(model_name, local_files_only=True)
+        except OSError:
+            if not auto_download:
+                raise
+
+            # 本地无缓存再联网下载；下载后会写入本地缓存，后续重启直接命中本地。
+            last_err = None
+            for i in range(retry_times + 1):
+                try:
+                    _embedder = SentenceTransformer(model_name)
+                    break
+                except OSError as e:
+                    last_err = e
+                    # 镜像不可用时，自动回退官方 Hugging Face 源重试。
+                    hf_endpoint = os.getenv("HF_ENDPOINT", "")
+                    if hf_endpoint and "hf-mirror.com" in hf_endpoint:
+                        _logger.warning("embedding: mirror unavailable, fallback to official huggingface")
+                        os.environ.pop("HF_ENDPOINT", None)
+                    if i < retry_times:
+                        time.sleep(min(2 * (i + 1), 5))
+            else:
+                raise last_err
     return _embedder
 
 
