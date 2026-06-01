@@ -16,7 +16,6 @@ os.environ["CHROMA_TELEMETRY"] = "False"
 import hashlib
 import re
 from typing import List, Dict
-from sentence_transformers import SentenceTransformer
 
 from utils.logger import get_logger
 
@@ -32,7 +31,17 @@ VECTOR_SIZE = 512  # bge-small-zh-v1.5 维度
 _embedder = None
 
 
-def get_embedder() -> SentenceTransformer:
+def _build_embedder(model_name: str, local_files_only: bool, hf_endpoint: str = ""):
+    """按指定 endpoint 构建 SentenceTransformer。"""
+    if hf_endpoint:
+        os.environ["HF_ENDPOINT"] = hf_endpoint
+    else:
+        os.environ.pop("HF_ENDPOINT", None)
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name, local_files_only=local_files_only)
+
+
+def get_embedder():
     global _embedder
     if _embedder is None:
         model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
@@ -43,11 +52,25 @@ def get_embedder() -> SentenceTransformer:
         # 4) 可通过 EMBEDDING_OFFLINE=true 强制纯离线
         embedding_offline = os.getenv("EMBEDDING_OFFLINE", "false").lower() == "true"
         auto_download = os.getenv("EMBEDDING_AUTO_DOWNLOAD", "true").lower() == "true"
+        prefer_mirror = os.getenv("EMBEDDING_PREFER_MIRROR", "false").lower() == "true"
         retry_times = max(int(os.getenv("EMBEDDING_DOWNLOAD_RETRIES", "2")), 0)
+        configured_endpoint = os.getenv("HF_ENDPOINT", "").strip()
+        official_endpoint = "https://huggingface.co"
+        if configured_endpoint and "hf-mirror.com" in configured_endpoint:
+            endpoint_candidates = (
+                [configured_endpoint, official_endpoint]
+                if prefer_mirror
+                else [official_endpoint, configured_endpoint]
+            )
+        elif configured_endpoint:
+            endpoint_candidates = [configured_endpoint]
+        else:
+            endpoint_candidates = [official_endpoint]
+
         if embedding_offline:
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"
-            _embedder = SentenceTransformer(model_name, local_files_only=True)
+            _embedder = _build_embedder(model_name, local_files_only=True)
             return _embedder
 
         os.environ.pop("TRANSFORMERS_OFFLINE", None)
@@ -55,26 +78,27 @@ def get_embedder() -> SentenceTransformer:
 
         # 先尝试只读本地缓存，命中则完全不联网。
         try:
-            _embedder = SentenceTransformer(model_name, local_files_only=True)
+            _embedder = _build_embedder(model_name, local_files_only=True)
         except OSError:
             if not auto_download:
                 raise
 
             # 本地无缓存再联网下载；下载后会写入本地缓存，后续重启直接命中本地。
             last_err = None
-            for i in range(retry_times + 1):
-                try:
-                    _embedder = SentenceTransformer(model_name)
-                    break
-                except OSError as e:
-                    last_err = e
-                    # 镜像不可用时，自动回退官方 Hugging Face 源重试。
-                    hf_endpoint = os.getenv("HF_ENDPOINT", "")
-                    if hf_endpoint and "hf-mirror.com" in hf_endpoint:
-                        _logger.warning("embedding: mirror unavailable, fallback to official huggingface")
-                        os.environ.pop("HF_ENDPOINT", None)
-                    if i < retry_times:
-                        time.sleep(min(2 * (i + 1), 5))
+            for endpoint in endpoint_candidates:
+                for i in range(retry_times + 1):
+                    try:
+                        _embedder = _build_embedder(model_name, local_files_only=False, hf_endpoint=endpoint)
+                        if endpoint != configured_endpoint:
+                            _logger.info("embedding: loaded via endpoint=%s", endpoint)
+                        break
+                    except OSError as e:
+                        last_err = e
+                        if i < retry_times:
+                            time.sleep(min(2 * (i + 1), 5))
+                else:
+                    continue
+                break
             else:
                 raise last_err
     return _embedder
@@ -92,13 +116,14 @@ def _use_qdrant() -> bool:
         client = QdrantClient(
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY"),
-            timeout=5,
+            timeout=int(os.getenv("QDRANT_TIMEOUT", "20")),
+            check_compatibility=False,  # 跳过会 404 的版本探测，避免误判连接失败
         )
         client.get_collections()  # 探测连通性
         _logger.info("qdrant: connection ok, using Qdrant Cloud")
         return True
     except Exception as e:
-        _logger.warning("qdrant: connection failed (%s), falling back to ChromaDB", e)
+        _logger.warning("qdrant: connection failed (%r), falling back to ChromaDB", e)
         return False
 
 
@@ -108,7 +133,8 @@ def _get_qdrant_client():
     return QdrantClient(
         url=os.getenv("QDRANT_URL"),
         api_key=os.getenv("QDRANT_API_KEY"),
-        timeout=10,
+        timeout=int(os.getenv("QDRANT_TIMEOUT", "20")),
+        check_compatibility=False,
     )
 
 

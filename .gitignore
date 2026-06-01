@@ -29,6 +29,9 @@ models/
 # 日志文件
 logs/
 .internalize_error.log
+
+# 本地启动脚本运行时产物（进程 PID）
+.streamlit-local.pid
 test_playwright.py
 .internalize_status.json
 design/tech-blog.md

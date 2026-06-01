@@ -78,6 +78,12 @@ cp .env.example .env
 streamlit run app.py
 ```
 
+或使用一键脚本（自动创建 venv、安装依赖、检查 `.env`）：
+
+```bash
+./scripts/run_local_ai_search.sh
+```
+
 > **首次启动**：sentence-transformers 模型（~90MB）自动下载，约需 2~3 分钟，后续秒开。
 > 模型下载完成后建议在 `.env` 中加入 `TRANSFORMERS_OFFLINE=1`，避免每次检索时联网检查更新导致延迟。
 
